@@ -1,0 +1,33 @@
+[package]
+name = "bmsir-arena-launcher"
+version = "0.1.0"
+description = "Secure updater and launcher for BMS-IR Arena oraja"
+authors = ["BMS-IR"]
+license = "GPL-3.0-only"
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "bmsir_arena_launcher"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[[bin]]
+name = "bmsir-arena-launcher"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+base64 = "0.22"
+ed25519-dalek = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_jcs = "0.1"
+sha2 = "0.10"
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"
