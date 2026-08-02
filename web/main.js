@@ -6,14 +6,14 @@ const dictionary = {
     lead: "署名を検証して、安全に更新・設定・起動します。",
     installation: "本体",
     rootLabel: "BMS-IR Arena oraja フォルダ",
-    javaLabel: "Java 17（自動検出できない場合）",
+    javaLabel: "Java 21以上（自動検出できない場合）",
     browse: "参照",
     inspect: "確認",
     useJava: "使用",
     actions: "起動",
     configure: "設定を開く",
     play: "ゲームを起動",
-    javaHint: "同梱Java 17を優先し、見つからない場合は指定されたJava 17を使用します。",
+    javaHint: "同梱Java 21を優先し、見つからない場合は指定されたJava 21以上を使用します。",
     update: "オフライン更新",
     updateText: "更新は内蔵Ed25519公開鍵と全ファイルのSHA-256が一致した場合だけ適用されます。失敗時はバックアップから復元します。",
     stagingLabel: "更新ファイルのフォルダ",
@@ -27,10 +27,10 @@ const dictionary = {
     iniKey: "SECTION.key",
     iniValue: "value",
     save: "保存",
-    ready: "本体とJava 17を確認しました。",
-    missingJava: "本体は見つかりましたが、Java 17を指定してください。",
+    ready: "本体とJava 21以上を確認しました。",
+    missingJava: "本体は見つかりましたが、Java 21以上を指定してください。",
     invalid: "本体フォルダを確認できませんでした。",
-    javaReady: "Java 17を確認しました。",
+    javaReady: "Java 21以上を確認しました。",
     updateDone: "更新を適用しました",
     selfUpdateStarted: "ランチャーを終了し、安全な自己更新を開始します。",
     iniDone: "INIを保存しました。"
@@ -40,14 +40,14 @@ const dictionary = {
     lead: "Verify signatures, then update, configure, and launch safely.",
     installation: "Installation",
     rootLabel: "BMS-IR Arena oraja folder",
-    javaLabel: "Java 17 (when automatic detection fails)",
+    javaLabel: "Java 21 or newer (when automatic detection fails)",
     browse: "Browse",
     inspect: "Inspect",
     useJava: "Use",
     actions: "Launch",
     configure: "Open configuration",
     play: "Launch game",
-    javaHint: "Bundled Java 17 is preferred; otherwise select a Java 17 executable.",
+    javaHint: "Bundled Java 21 is preferred; otherwise select a Java 21 or newer executable.",
     update: "Offline update",
     updateText: "Updates are applied only after the built-in Ed25519 key and every SHA-256 match. A failed install is rolled back.",
     stagingLabel: "Update files folder",
@@ -61,10 +61,10 @@ const dictionary = {
     iniKey: "SECTION.key",
     iniValue: "value",
     save: "Save",
-    ready: "The game and Java 17 are ready.",
-    missingJava: "The game was found, but Java 17 must be selected.",
+    ready: "The game and Java 21 or newer are ready.",
+    missingJava: "The game was found, but Java 21 or newer must be selected.",
     invalid: "The installation folder could not be verified.",
-    javaReady: "Java 17 verified.",
+    javaReady: "Java 21 or newer verified.",
     updateDone: "Update applied",
     selfUpdateStarted: "The launcher will exit and begin its verified self-update.",
     iniDone: "INI saved."
@@ -147,11 +147,11 @@ byId("inspect").addEventListener("click", async () => {
 
 byId("use-java").addEventListener("click", async () => {
   try {
-    await invoke("inspect_java", {path: byId("java").value});
+    const javaVersion = await invoke("inspect_java", {path: byId("java").value});
     if (!installation) throw new Error("inspect the game folder first");
     installation.java_runtime = byId("java").value;
     installation.java_source = "manual";
-    installation.java_version = 17;
+    installation.java_version = javaVersion;
     byId("installation-status").textContent = dictionary[language].javaReady;
     setLaunchEnabled(true);
   } catch (error) {

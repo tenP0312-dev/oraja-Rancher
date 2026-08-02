@@ -1,6 +1,7 @@
 # BMS-IR Arena Launcher
 
 Tauri 2 based launcher for the unified BMS-IR Arena oraja distribution.
+The current source version is `0.1.1`.
 
 The launcher treats a release manifest as untrusted until its canonical JSON
 payload passes Ed25519 verification. Every staged artifact is then checked
@@ -11,9 +12,11 @@ Development builds are intentionally not production releases. Windows
 Authenticode and macOS Developer ID + notarization are required before a
 launcher artifact can be published as the official download.
 
-The GUI detects the game body, rejects duplicate BMS-IR plugin jars, accepts
-only Java 17, launches configuration or play without shell interpolation, and
-can update INI values without rewriting unrelated comments or keys. Offline
+The GUI detects the game body, rejects ambiguous duplicate BMS-IR plugin jars,
+accepts Java 21 or newer, launches configuration or play without shell
+interpolation, and can update INI values without rewriting unrelated comments
+or keys. A verified versioned plugin update moves the prior single plugin into
+the transaction backup before installing its replacement. Offline
 updates use the public key compiled as `BMSIR_ARENA_RELEASE_PUBLIC_KEY`; builds
 without that reviewed key fail closed when update is requested. A verified
 staged launcher can restart in helper mode, wait for the old process to exit,
