@@ -37,10 +37,12 @@ Legacy single-language release notes remain readable as a fallback.
 Rust downloads the platform manifest and artifacts. The WebView never chooses
 paths or verifies security metadata. The update is accepted only after the
 canonical manifest passes its compiled Ed25519 key and every file matches the
-signed path, size, and SHA-256. Files are staged under the portable root,
-backed up, replaced, and rolled back on failure. A launcher update starts the
-verified staged executable as a helper, waits for the old process, applies the
-same transaction, and then starts the game when requested.
+signed path, size, and SHA-256. Transient transport, rate-limit, and server
+errors are retried with a bounded backoff. Files are staged under the portable
+root, signed executable flags are applied before a staged launcher is started,
+and installation is backed up, replaced, and rolled back on failure. A launcher
+update starts the verified staged executable as a helper, waits for the old
+process, applies the same transaction, and then starts the game when requested.
 
 The static patch publication tools and manifest layout are maintained in
 `tenP0312-dev/bms-ir-arena-patch-server`. Build variables are:

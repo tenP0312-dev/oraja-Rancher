@@ -367,7 +367,7 @@ fn ensure_destination_is_safe(root: &Path, destination: &Path) -> Result<(), Ins
 }
 
 #[cfg(unix)]
-fn set_executable_if_requested(path: &Path, executable: bool) -> Result<(), io::Error> {
+pub(crate) fn set_executable_if_requested(path: &Path, executable: bool) -> Result<(), io::Error> {
     use std::os::unix::fs::PermissionsExt;
     if executable {
         let mut permissions = path.metadata()?.permissions();
@@ -378,7 +378,10 @@ fn set_executable_if_requested(path: &Path, executable: bool) -> Result<(), io::
 }
 
 #[cfg(not(unix))]
-fn set_executable_if_requested(_path: &Path, _executable: bool) -> Result<(), io::Error> {
+pub(crate) fn set_executable_if_requested(
+    _path: &Path,
+    _executable: bool,
+) -> Result<(), io::Error> {
     Ok(())
 }
 

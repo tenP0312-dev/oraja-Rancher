@@ -1,3 +1,4 @@
+use crate::install::set_executable_if_requested;
 use crate::manifest::{verify_file, verify_manifest, ReleaseAnnouncement, ReleaseManifest};
 use serde::Serialize;
 use std::cmp::Ordering;
@@ -14,6 +15,7 @@ const STAGING_DIRECTORY: &str = ".bmsir-update-staging";
 const STAGED_MANIFEST: &str = ".bmsir-update-manifest.json";
 const CACHED_POLICY: &str = ".bmsir-launcher-policy.json";
 const CACHED_POLICY_TEMPORARY: &str = ".bmsir-launcher-policy.tmp";
+const DOWNLOAD_ATTEMPTS: usize = 4;
 const fn configured_value(value: Option<&str>) -> bool {
     match value {
         Some(value) => !value.is_empty(),
@@ -171,11 +173,30 @@ fn agent() -> ureq::Agent {
         .build()
 }
 
+fn fetch_response(url: &Url) -> Result<ureq::Response, UpdateError> {
+    let agent = agent();
+    for attempt in 0..DOWNLOAD_ATTEMPTS {
+        match agent.get(url.as_str()).call() {
+            Ok(response) => return Ok(response),
+            Err(error) => {
+                let retryable = matches!(
+                    error,
+                    ureq::Error::Transport(_)
+                        | ureq::Error::Status(429, _)
+                        | ureq::Error::Status(500..=599, _)
+                );
+                if !retryable || attempt + 1 == DOWNLOAD_ATTEMPTS {
+                    return Err(UpdateError::Request(error.to_string()));
+                }
+                std::thread::sleep(Duration::from_millis(250 * (1 << attempt)));
+            }
+        }
+    }
+    unreachable!("download retry loop always returns")
+}
+
 fn fetch_bytes(url: &Url, maximum: u64) -> Result<Vec<u8>, UpdateError> {
-    let response = agent()
-        .get(url.as_str())
-        .call()
-        .map_err(|error| UpdateError::Request(error.to_string()))?;
+    let response = fetch_response(url)?;
     let mut reader = response.into_reader().take(maximum + 1);
     let mut output = Vec::new();
     reader.read_to_end(&mut output)?;
@@ -515,10 +536,7 @@ fn prepare_from(
         ];
         url_segments.extend(segments);
         let url = append_url(base_url, &url_segments)?;
-        let response = agent()
-            .get(url.as_str())
-            .call()
-            .map_err(|error| UpdateError::Request(error.to_string()))?;
+        let response = fetch_response(&url)?;
         let mut reader = response.into_reader().take(artifact.size + 1);
         let mut target = fs::File::create(&destination)?;
         let copied = io::copy(&mut reader, &mut target)?;
@@ -531,6 +549,7 @@ fn prepare_from(
             });
         }
         verify_file(&destination, artifact)?;
+        set_executable_if_requested(&destination, artifact.executable)?;
     }
     let manifest_path = staging.join(STAGED_MANIFEST);
     fs::write(&manifest_path, manifest_json)?;
@@ -854,6 +873,50 @@ mod tests {
         for (path, bytes) in files {
             assert_eq!(fs::read(prepared.staging.join(path)).unwrap(), bytes);
         }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(prepared.staging.join("runtime/bin/java.exe"))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_ne!(mode & 0o111, 0);
+        }
+    }
+
+    #[test]
+    fn transient_server_errors_are_retried() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            for attempt in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0_u8; 1024];
+                stream.read(&mut request).unwrap();
+                if attempt == 0 {
+                    write!(
+                        stream,
+                        "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    )
+                    .unwrap();
+                } else {
+                    write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK"
+                    )
+                    .unwrap();
+                }
+            }
+        });
+
+        let bytes = fetch_bytes(
+            &Url::parse(&format!("http://{address}/artifact")).unwrap(),
+            2,
+        )
+        .unwrap();
+        server.join().unwrap();
+        assert_eq!(bytes, b"OK");
     }
 
     #[test]
