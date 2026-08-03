@@ -5,36 +5,46 @@ const dictionary = {
     checking: "更新を確認しています",
     current: "最新です",
     unavailable: "更新を確認できませんでした。現在の本体は起動できます",
-    invalid: "本体JARまたはJava 21以上を確認できません",
-    ready: "本体とJavaを確認しました",
+    unavailableNoInstall: "セットアップファイルを取得できませんでした",
+    invalid: "本体JAR、Java 21以上、またはArenaプラグインを確認できません",
+    notInstalled: "本体はまだインストールされていません",
+    ready: "本体、Java、Arenaプラグインを確認しました",
     play: "Arenaを起動",
     configure: "起動前コンフィグ",
     check: "更新を確認",
     updateLaunch: "更新して起動",
+    installLaunch: "ダウンロードして起動",
     launchCurrent: "現在の版を起動",
     available: "BMS-IR Arena {version} が利用できます",
+    installAvailable: "BMS-IR Arena {version} をセットアップできます",
     mandatory: "この更新は必須です",
     revoked: "現在の版は停止されています。更新が必要です",
     launcherOld: "ランチャーの更新が必要です",
     updating: "更新ファイルを検証して適用しています",
+    installing: "本体ファイルを検証してセットアップしています",
     details: "詳細"
   },
   en: {
     checking: "Checking for updates",
     current: "Up to date",
     unavailable: "Could not check for updates. The installed version can still launch",
-    invalid: "The game JAR or Java 21+ could not be found",
-    ready: "Game and Java are ready",
+    unavailableNoInstall: "Could not download the setup information",
+    invalid: "The game JAR, Java 21+, or Arena plugin could not be found",
+    notInstalled: "The game is not installed yet",
+    ready: "Game, Java, and Arena plugin are ready",
     play: "Launch Arena",
     configure: "Pre-launch configuration",
     check: "Check for updates",
     updateLaunch: "Update and launch",
+    installLaunch: "Download and launch",
     launchCurrent: "Launch installed version",
     available: "BMS-IR Arena {version} is available",
+    installAvailable: "BMS-IR Arena {version} is ready to install",
     mandatory: "This update is required",
     revoked: "The installed version has been revoked and must be updated",
     launcherOld: "The launcher must be updated",
     updating: "Verifying and applying the update",
+    installing: "Verifying and installing the game files",
     details: "Details"
   }
 };
@@ -86,16 +96,17 @@ function renderSafeMarkdown(markdown) {
 }
 
 function canLaunch() {
-  return Boolean(state?.installation?.game_jar && state?.installation?.java_runtime);
+  return Boolean(state?.installation_ready);
 }
 
 function renderUpdate() {
   if (!state) return;
   const ready = canLaunch();
-  byId("installation-status").textContent = ready ? tr("ready") : tr("invalid");
+  byId("installation-status").textContent = ready ? tr("ready") : tr("notInstalled");
   byId("play").disabled = !ready;
   byId("configure").disabled = !ready;
-  byId("version").textContent = `${state.installed_version}  /  ${state.channel}`;
+  const version = ready ? state.installed_version : tr("notInstalled");
+  byId("version").textContent = `${version}  /  ${state.channel}`;
   byId("update-panel").hidden = !update || update.status === "current";
   if (!update) return;
 
@@ -103,9 +114,12 @@ function renderUpdate() {
     setStatus(tr("current"), "ok");
     return;
   }
-  byId("available-title").textContent = tr("available").replace("{version}", update.available_version);
+  const installing = update.status === "install_required";
+  const title = installing ? tr("installAvailable") : tr("available");
+  byId("available-title").textContent = title.replace("{version}", update.available_version);
+  byId("update-launch").textContent = installing ? tr("installLaunch") : tr("updateLaunch");
   renderSafeMarkdown(update.release_notes_markdown);
-  const blocked = update.mandatory || update.status === "revoked" || update.status === "launcher_too_old";
+  const blocked = installing || update.mandatory || update.status === "revoked" || update.status === "launcher_too_old";
   byId("launch-current").disabled = blocked || !ready;
   byId("play").disabled = blocked || !ready;
   byId("configure").disabled = blocked || !ready;
@@ -115,6 +129,8 @@ function renderUpdate() {
     setStatus(tr("launcherOld"), "error");
   } else if (update.mandatory) {
     setStatus(tr("mandatory"), "warning");
+  } else if (installing) {
+    setStatus(byId("available-title").textContent, "available");
   } else {
     setStatus(byId("available-title").textContent, "available");
   }
@@ -141,7 +157,7 @@ async function checkUpdate() {
     renderUpdate();
   } catch (error) {
     update = null;
-    setStatus(tr("unavailable"), "warning");
+    setStatus(tr(canLaunch() ? "unavailable" : "unavailableNoInstall"), "warning");
     showError(error);
   } finally {
     byId("check").disabled = false;
@@ -167,7 +183,7 @@ async function launch(configuration = false) {
 }
 
 async function installAndLaunch() {
-  setStatus(tr("updating"), "available");
+  setStatus(tr(update?.status === "install_required" ? "installing" : "updating"), "available");
   byId("update-launch").disabled = true;
   try {
     await invoke("install_online_update", {launchAfter: true});
@@ -191,4 +207,4 @@ byId("launch-current").addEventListener("click", () => launch(false));
 
 applyLanguage();
 await loadState();
-if (canLaunch()) await checkUpdate();
+if (state) await checkUpdate();

@@ -39,6 +39,12 @@ pub struct InstallationInfo {
     pub plugin_jars: Vec<String>,
 }
 
+pub fn is_ready(installation: &InstallationInfo) -> bool {
+    installation.game_jar.is_some()
+        && installation.java_runtime.is_some()
+        && installation.plugin_jars.len() == 1
+}
+
 pub fn inspect(root: &Path) -> Result<InstallationInfo, InstallError> {
     if !root.is_dir() {
         return Err(InstallError::InvalidRoot);
@@ -447,9 +453,12 @@ pub fn run_self_update_helper(
         thread::sleep(Duration::from_millis(250));
         match apply_staged(root, staging, manifest) {
             Ok(()) => {
+                let installation = inspect(root)?;
+                if !is_ready(&installation) {
+                    return Err(InstallError::InvalidRoot);
+                }
                 write_version_marker(root, &manifest.version)?;
                 if launch_after {
-                    let installation = inspect(root)?;
                     let java = installation
                         .java_runtime
                         .as_deref()

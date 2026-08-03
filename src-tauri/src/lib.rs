@@ -12,6 +12,8 @@ use tauri::AppHandle;
 #[derive(Debug, Serialize)]
 struct LauncherState {
     installation: InstallationInfo,
+    installation_ready: bool,
+    update_configuration: &'static str,
     channel: String,
     platform: String,
     installed_version: String,
@@ -22,32 +24,43 @@ struct LauncherState {
 fn launcher_state() -> Result<LauncherState, String> {
     let root = install::launcher_install_root().map_err(|error| error.to_string())?;
     let installation = install::inspect(&root).map_err(|error| error.to_string())?;
+    let installation_ready = install::is_ready(&installation);
     Ok(LauncherState {
         channel: update::channel(),
         platform: update::platform().to_string(),
         installed_version: update::installed_version(&root),
         launcher_version: env!("CARGO_PKG_VERSION").to_string(),
         installation,
+        installation_ready,
+        update_configuration: update::CONFIGURATION_MARKER,
     })
 }
 
 #[tauri::command]
 async fn check_online_update() -> Result<update::UpdateInfo, String> {
     let root = install::launcher_install_root().map_err(|error| error.to_string())?;
-    tauri::async_runtime::spawn_blocking(move || update::check(&root))
-        .await
-        .map_err(|error| error.to_string())?
-        .map_err(|error| error.to_string())
+    let installation = install::inspect(&root).map_err(|error| error.to_string())?;
+    let installation_ready = install::is_ready(&installation);
+    tauri::async_runtime::spawn_blocking(move || {
+        update::check_installation(&root, installation_ready)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 async fn install_online_update(app: AppHandle, launch_after: bool) -> Result<(), String> {
     let root = install::launcher_install_root().map_err(|error| error.to_string())?;
+    let installation = install::inspect(&root).map_err(|error| error.to_string())?;
+    let installation_ready = install::is_ready(&installation);
     let prepare_root = root.clone();
-    let prepared = tauri::async_runtime::spawn_blocking(move || update::prepare(&prepare_root))
-        .await
-        .map_err(|error| error.to_string())?
-        .map_err(|error| error.to_string())?;
+    let prepared = tauri::async_runtime::spawn_blocking(move || {
+        update::prepare(&prepare_root, installation_ready)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())?;
 
     if install::launcher_artifact_path(&root, &prepared.manifest).is_ok() {
         install::spawn_self_update(
@@ -63,6 +76,12 @@ async fn install_online_update(app: AppHandle, launch_after: bool) -> Result<(),
 
     install::apply_staged(&root, &prepared.staging, &prepared.manifest)
         .map_err(|error| error.to_string())?;
+    let installed = install::inspect(&root).map_err(|error| error.to_string())?;
+    if !install::is_ready(&installed) {
+        return Err(
+            "the signed release did not install Arena oraja, Java, and its plugin".to_string(),
+        );
+    }
     install::write_version_marker(&root, &prepared.manifest.version)
         .map_err(|error| error.to_string())?;
     if launch_after {

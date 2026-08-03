@@ -14,6 +14,10 @@ The window exposes three normal actions:
 Update checks use the channel selected from the executable name. `BMS-IR
 Arena.exe` reads `stable`; `BMS-IR Arena Test.exe` reads `test`, so separate
 folders can coexist. Network failure never blocks a valid installed body.
+When the executable is placed in an otherwise empty directory, the launcher
+checks the selected channel immediately and offers the signed current release
+as an initial download even when its version matches the launcher's body
+version. A missing or incomplete body is never treated as already installed.
 Optional updates retain a launch-current action; mandatory or revoked versions
 do not.
 
@@ -32,6 +36,10 @@ The static patch publication tools and manifest layout are maintained in
 - `BMSIR_ARENA_UPDATE_BASE_URL`: HTTPS root containing `channels/`
 - `BMSIR_ARENA_CLIENT_VERSION`: initial body version when no local marker exists
 
+The release packager accepts only a launcher compiled with both the endpoint
+and verification key. This prevents an offline CI validation binary from being
+renamed and shipped as a working updater.
+
 ## Validation build
 
 ```sh
@@ -40,8 +48,8 @@ cargo test --locked
 cargo build --release --locked
 ```
 
-CI uploads only two short-lived, unsigned Windows portable executables. It does
-not build an installer. Public stable distribution remains blocked until the
-reviewed production Ed25519 key and Authenticode signing are supplied. Internal
-test builds may use a disposable test key without per-build publication
-approval.
+CI uploads one short-lived, unsigned Windows validation executable. It does not
+build an installer or a distributable updater. Public stable distribution
+remains blocked until the reviewed production Ed25519 key and Authenticode
+signing are supplied. Internal test builds may use a disposable test key
+without per-build publication approval.
