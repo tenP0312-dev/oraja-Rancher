@@ -16,6 +16,7 @@ const STAGED_MANIFEST: &str = ".bmsir-update-manifest.json";
 const CACHED_POLICY: &str = ".bmsir-launcher-policy.json";
 const CACHED_POLICY_TEMPORARY: &str = ".bmsir-launcher-policy.tmp";
 const DOWNLOAD_ATTEMPTS: usize = 4;
+const PROGRESS_BYTES_STEP: u64 = 1024 * 1024;
 const fn configured_value(value: Option<&str>) -> bool {
     match value {
         Some(value) => !value.is_empty(),
@@ -79,6 +80,38 @@ pub struct PreparedUpdate {
     pub manifest: ReleaseManifest,
     pub staging: PathBuf,
     pub manifest_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct UpdateProgress {
+    pub phase: String,
+    pub bytes_done: u64,
+    pub bytes_total: u64,
+    pub files_done: u64,
+    pub files_total: u64,
+}
+
+impl UpdateProgress {
+    pub fn completed(phase: &str, release: &ReleaseManifest) -> Self {
+        let (bytes_total, files_total) = release_totals(release);
+        Self {
+            phase: phase.to_string(),
+            bytes_done: bytes_total,
+            bytes_total,
+            files_done: files_total,
+            files_total,
+        }
+    }
+}
+
+fn release_totals(release: &ReleaseManifest) -> (u64, u64) {
+    (
+        release
+            .artifacts
+            .iter()
+            .fold(0_u64, |total, artifact| total.saturating_add(artifact.size)),
+        release.artifacts.len() as u64,
+    )
 }
 
 pub fn channel() -> String {
@@ -468,26 +501,38 @@ pub fn check_installation(
     Ok(update)
 }
 
-pub fn prepare(root: &Path, installation_ready: bool) -> Result<PreparedUpdate, UpdateError> {
+pub fn prepare_with_progress<F>(
+    root: &Path,
+    installation_ready: bool,
+    progress: F,
+) -> Result<PreparedUpdate, UpdateError>
+where
+    F: FnMut(UpdateProgress),
+{
     let selected_channel = channel();
-    prepare_from(
+    prepare_from_with_progress(
         root,
         installation_ready,
         update_base_url()?,
         release_public_key()?,
         &selected_channel,
         platform(),
+        progress,
     )
 }
 
-fn prepare_from(
+fn prepare_from_with_progress<F>(
     root: &Path,
     installation_ready: bool,
     base_url: &str,
     public_key: &str,
     selected_channel: &str,
     selected_platform: &str,
-) -> Result<PreparedUpdate, UpdateError> {
+    mut progress: F,
+) -> Result<PreparedUpdate, UpdateError>
+where
+    F: FnMut(UpdateProgress),
+{
     let root = root.canonicalize()?;
     let (manifest_json, release) =
         fetch_release_from(base_url, public_key, selected_channel, selected_platform)?;
@@ -521,6 +566,18 @@ fn prepare_from(
     }
     fs::create_dir_all(&staging)?;
 
+    let (bytes_total, files_total) = release_totals(&release);
+    let mut bytes_done = 0_u64;
+    let mut files_done = 0_u64;
+    let mut last_reported_bytes = 0_u64;
+    progress(UpdateProgress {
+        phase: "downloading".to_string(),
+        bytes_done,
+        bytes_total,
+        files_done,
+        files_total,
+    });
+
     for artifact in &release.artifacts {
         let destination = staging.join(&artifact.path);
         if let Some(parent) = destination.parent() {
@@ -539,7 +596,27 @@ fn prepare_from(
         let response = fetch_response(&url)?;
         let mut reader = response.into_reader().take(artifact.size + 1);
         let mut target = fs::File::create(&destination)?;
-        let copied = io::copy(&mut reader, &mut target)?;
+        let mut copied = 0_u64;
+        let mut buffer = [0_u8; 256 * 1024];
+        loop {
+            let count = reader.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            target.write_all(&buffer[..count])?;
+            copied = copied.saturating_add(count as u64);
+            bytes_done = bytes_done.saturating_add(count as u64);
+            if bytes_done.saturating_sub(last_reported_bytes) >= PROGRESS_BYTES_STEP {
+                progress(UpdateProgress {
+                    phase: "downloading".to_string(),
+                    bytes_done: bytes_done.min(bytes_total),
+                    bytes_total,
+                    files_done,
+                    files_total,
+                });
+                last_reported_bytes = bytes_done;
+            }
+        }
         target.flush()?;
         if copied != artifact.size {
             return Err(if copied > artifact.size {
@@ -550,6 +627,15 @@ fn prepare_from(
         }
         verify_file(&destination, artifact)?;
         set_executable_if_requested(&destination, artifact.executable)?;
+        files_done += 1;
+        progress(UpdateProgress {
+            phase: "downloading".to_string(),
+            bytes_done: bytes_done.min(bytes_total),
+            bytes_total,
+            files_done,
+            files_total,
+        });
+        last_reported_bytes = bytes_done;
     }
     let manifest_path = staging.join(STAGED_MANIFEST);
     fs::write(&manifest_path, manifest_json)?;
@@ -859,17 +945,47 @@ mod tests {
         });
 
         let root = tempfile::tempdir().unwrap();
-        let prepared = prepare_from(
+        let mut progress = Vec::new();
+        let prepared = prepare_from_with_progress(
             root.path(),
             false,
             &format!("http://{address}"),
             &STANDARD.encode(signing.verifying_key().to_bytes()),
             "test",
             "windows-x64",
+            |event| progress.push(event),
         )
         .unwrap();
         server.join().unwrap();
         assert_eq!(prepared.manifest.version, "0.4.14");
+        let expected_bytes = files
+            .iter()
+            .map(|(_, bytes)| bytes.len() as u64)
+            .sum::<u64>();
+        assert_eq!(
+            progress.first(),
+            Some(&UpdateProgress {
+                phase: "downloading".into(),
+                bytes_done: 0,
+                bytes_total: expected_bytes,
+                files_done: 0,
+                files_total: files.len() as u64,
+            })
+        );
+        assert_eq!(
+            progress.last(),
+            Some(&UpdateProgress {
+                phase: "downloading".into(),
+                bytes_done: expected_bytes,
+                bytes_total: expected_bytes,
+                files_done: files.len() as u64,
+                files_total: files.len() as u64,
+            })
+        );
+        assert!(progress.windows(2).all(|events| {
+            events[0].bytes_done <= events[1].bytes_done
+                && events[0].files_done <= events[1].files_done
+        }));
         for (path, bytes) in files {
             assert_eq!(fs::read(prepared.staging.join(path)).unwrap(), bytes);
         }

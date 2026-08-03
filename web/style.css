@@ -21,7 +21,11 @@ header {
 h1 { margin: 0; font-size: 28px; letter-spacing: 0; }
 h2 { margin: 0 0 10px; font-size: 17px; letter-spacing: 0; }
 p { margin: 5px 0 0; color: #536058; }
-#version { font-family: ui-monospace, SFMono-Regular, monospace; font-size: 13px; }
+#version, #launcher-version {
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 13px;
+}
+#launcher-version { margin-top: 2px; }
 .status-band {
   display: grid;
   grid-template-columns: 14px 1fr;
@@ -42,6 +46,32 @@ p { margin: 5px 0 0; color: #536058; }
 #status-mark[data-kind="available"] { background: #1769aa; }
 #status-mark[data-kind="warning"] { background: #b96e00; }
 #status-mark[data-kind="error"] { background: #b43c3c; }
+.update-progress { margin-top: 13px; }
+.progress-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  color: #354139;
+  font-size: 13px;
+}
+.progress-heading strong {
+  flex: 0 0 auto;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 14px;
+}
+#progress-bar {
+  display: block;
+  width: 100%;
+  height: 11px;
+  margin-top: 7px;
+  accent-color: #1769aa;
+}
+#progress-detail {
+  margin-top: 5px;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 12px;
+}
 .actions { display: flex; flex-wrap: wrap; gap: 10px; }
 button {
   min-height: 42px;

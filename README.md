@@ -12,6 +12,13 @@ The window exposes three normal actions:
 - open the existing pre-launch configuration with `-c`
 - check for updates
 
+The header always identifies the installed body version, selected update
+channel, and launcher version separately. During an installation or update,
+the status band shows byte-accurate overall progress, transferred and total
+size, and verified file count. After transfer it reports the verification,
+application, and launcher-restart phases instead of leaving the window on an
+indeterminate update message.
+
 Update checks use the channel selected from the executable name. `BMS-IR
 Arena.exe` reads `stable`; `BMS-IR Arena Test.exe` reads `test`, so separate
 folders can coexist. The equivalent macOS app bundle names select the same

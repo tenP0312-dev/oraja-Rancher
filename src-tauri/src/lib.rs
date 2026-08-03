@@ -7,7 +7,9 @@ use serde::Serialize;
 use std::env;
 use std::fs;
 use std::path::Path;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
+
+const UPDATE_PROGRESS_EVENT: &str = "arena-update-progress";
 
 #[derive(Debug, Serialize)]
 struct LauncherState {
@@ -64,13 +66,20 @@ async fn install_online_update(app: AppHandle, launch_after: bool) -> Result<(),
     let installation = install::inspect(&root).map_err(|error| error.to_string())?;
     let installation_ready = install::is_ready(&installation);
     let prepare_root = root.clone();
+    let progress_app = app.clone();
     let prepared = tauri::async_runtime::spawn_blocking(move || {
-        update::prepare(&prepare_root, installation_ready)
+        update::prepare_with_progress(&prepare_root, installation_ready, |progress| {
+            let _ = progress_app.emit(UPDATE_PROGRESS_EVENT, progress);
+        })
     })
     .await
     .map_err(|error| error.to_string())?
     .map_err(|error| error.to_string())?;
 
+    let _ = app.emit(
+        UPDATE_PROGRESS_EVENT,
+        update::UpdateProgress::completed("verifying", &prepared.manifest),
+    );
     if install::launcher_artifact_path(&root, &prepared.manifest).is_ok() {
         install::spawn_self_update(
             &prepared.staging,
@@ -79,10 +88,18 @@ async fn install_online_update(app: AppHandle, launch_after: bool) -> Result<(),
             launch_after,
         )
         .map_err(|error| error.to_string())?;
+        let _ = app.emit(
+            UPDATE_PROGRESS_EVENT,
+            update::UpdateProgress::completed("restarting", &prepared.manifest),
+        );
         app.exit(0);
         return Ok(());
     }
 
+    let _ = app.emit(
+        UPDATE_PROGRESS_EVENT,
+        update::UpdateProgress::completed("applying", &prepared.manifest),
+    );
     install::apply_staged(&root, &prepared.staging, &prepared.manifest)
         .map_err(|error| error.to_string())?;
     let installed = install::inspect(&root).map_err(|error| error.to_string())?;

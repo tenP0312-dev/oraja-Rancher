@@ -12,6 +12,7 @@
     <div>
       <h1>BMS-IR Arena</h1>
       <p id="version">...</p>
+      <p id="launcher-version">Launcher ...</p>
     </div>
     <button id="language" class="quiet language-button" type="button" aria-label="英語に切り替え" title="英語に切り替え">
       <span class="language-icon" aria-hidden="true">&#127760;</span>
@@ -24,6 +25,14 @@
     <div>
       <strong id="update-status" data-i18n="checking">更新を確認しています</strong>
       <p id="installation-status"></p>
+      <div id="update-progress" class="update-progress" hidden>
+        <div class="progress-heading">
+          <span id="progress-label"></span>
+          <strong id="progress-percent">0%</strong>
+        </div>
+        <progress id="progress-bar" max="100" value="0">0%</progress>
+        <p id="progress-detail"></p>
+      </div>
     </div>
   </section>
 

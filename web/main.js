@@ -1,4 +1,5 @@
 const invoke = window.__TAURI__?.core?.invoke;
+const listen = window.__TAURI__?.event?.listen;
 
 const dictionary = {
   ja: {
@@ -27,7 +28,14 @@ const dictionary = {
     noInformation: "現在のお知らせはありません",
     policyInvalid: "保存された更新判定を検証できません。オンライン更新確認が必要です",
     updateUnconfigured: "このランチャーには更新先が設定されていません",
-    switchLanguage: "英語に切り替え"
+    switchLanguage: "英語に切り替え",
+    bodyVersion: "本体 {version} / {channel}",
+    launcherVersion: "Launcher {version}",
+    downloading: "本体をダウンロード中",
+    verifying: "ダウンロードしたファイルを検証中",
+    applying: "更新を適用中",
+    restarting: "新しいランチャーを起動中",
+    progressFiles: "{done} / {total} ファイル"
   },
   en: {
     checking: "Checking for updates",
@@ -55,7 +63,14 @@ const dictionary = {
     noInformation: "There are no current announcements",
     policyInvalid: "The saved update policy is invalid. An online update check is required",
     updateUnconfigured: "This launcher has no update endpoint configured",
-    switchLanguage: "Switch to Japanese"
+    switchLanguage: "Switch to Japanese",
+    bodyVersion: "Body {version} / {channel}",
+    launcherVersion: "Launcher {version}",
+    downloading: "Downloading game files",
+    verifying: "Verifying downloaded files",
+    applying: "Applying update",
+    restarting: "Starting the updated launcher",
+    progressFiles: "{done} / {total} files"
   }
 };
 
@@ -64,6 +79,8 @@ let state = null;
 let update = null;
 let checking = true;
 let updateUnavailable = false;
+let installingUpdate = false;
+let updateProgress = null;
 const byId = id => document.getElementById(id);
 const tr = key => dictionary[language][key];
 
@@ -76,11 +93,45 @@ function applyLanguage() {
   byId("language").setAttribute("aria-label", tr("switchLanguage"));
   byId("language").title = tr("switchLanguage");
   renderUpdate();
+  renderProgress();
 }
 
 function setStatus(text, kind = "neutral") {
   byId("update-status").textContent = text;
   byId("status-mark").dataset.kind = kind;
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes) || 0;
+  if (value >= 1024 * 1024 * 1024) return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+  if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+  if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${value} B`;
+}
+
+function renderProgress() {
+  const container = byId("update-progress");
+  if (!container || !installingUpdate || !updateProgress) {
+    if (container) container.hidden = true;
+    return;
+  }
+  const phase = dictionary[language][updateProgress.phase] ? updateProgress.phase : "downloading";
+  const bytesDone = Number(updateProgress.bytes_done) || 0;
+  const bytesTotal = Number(updateProgress.bytes_total) || 0;
+  const filesDone = Number(updateProgress.files_done) || 0;
+  const filesTotal = Number(updateProgress.files_total) || 0;
+  const percent = bytesTotal > 0
+    ? Math.min(100, Math.floor(bytesDone * 100 / bytesTotal))
+    : (phase === "downloading" ? 0 : 100);
+  const files = tr("progressFiles")
+    .replace("{done}", filesDone)
+    .replace("{total}", filesTotal);
+  byId("progress-label").textContent = tr(phase);
+  byId("progress-percent").textContent = `${percent}%`;
+  byId("progress-bar").value = percent;
+  byId("progress-bar").textContent = `${percent}%`;
+  byId("progress-detail").textContent = `${formatBytes(bytesDone)} / ${formatBytes(bytesTotal)}  ·  ${files}`;
+  container.hidden = false;
 }
 
 function renderSafeMarkdown(markdown) {
@@ -164,7 +215,11 @@ function renderUpdate() {
   byId("configure").disabled = !canLaunch();
   byId("check").disabled = checking;
   const version = installed ? state.installed_version : tr("notInstalled");
-  byId("version").textContent = `${version}  /  ${state.channel}`;
+  byId("version").textContent = tr("bodyVersion")
+    .replace("{version}", version)
+    .replace("{channel}", state.channel);
+  byId("launcher-version").textContent = tr("launcherVersion")
+    .replace("{version}", state.launcher_version);
   byId("update-panel").hidden = !update || update.status === "current";
   renderAnnouncements();
   if (checking) {
@@ -265,11 +320,25 @@ async function launch(configuration = false) {
 }
 
 async function installAndLaunch() {
+  installingUpdate = true;
+  updateProgress = {
+    phase: "downloading",
+    bytes_done: 0,
+    bytes_total: Array.isArray(update?.artifacts)
+      ? update.artifacts.reduce((total, artifact) => total + Number(artifact.size || 0), 0)
+      : 0,
+    files_done: 0,
+    files_total: Array.isArray(update?.artifacts) ? update.artifacts.length : 0
+  };
+  renderProgress();
   setStatus(tr(update?.status === "install_required" ? "installing" : "updating"), "available");
   byId("update-launch").disabled = true;
   try {
     await invoke("install_online_update", {launchAfter: true});
   } catch (error) {
+    installingUpdate = false;
+    updateProgress = null;
+    renderProgress();
     byId("update-launch").disabled = false;
     showError(error);
     renderUpdate();
@@ -286,6 +355,14 @@ byId("configure").addEventListener("click", () => launch(true));
 byId("check").addEventListener("click", checkUpdate);
 byId("update-launch").addEventListener("click", installAndLaunch);
 byId("launch-current").addEventListener("click", () => launch(false));
+
+if (listen) {
+  await listen("arena-update-progress", event => {
+    if (!installingUpdate) return;
+    updateProgress = event.payload;
+    renderProgress();
+  });
+}
 
 applyLanguage();
 await loadState();
