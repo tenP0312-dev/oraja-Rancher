@@ -22,7 +22,9 @@ const dictionary = {
     launcherOld: "ランチャーの更新が必要です",
     updating: "更新ファイルを検証して適用しています",
     installing: "本体ファイルを検証してセットアップしています",
-    details: "詳細"
+    details: "詳細",
+    updateUnconfigured: "このランチャーには更新先が設定されていません",
+    switchLanguage: "英語に切り替え"
   },
   en: {
     checking: "Checking for updates",
@@ -45,7 +47,9 @@ const dictionary = {
     launcherOld: "The launcher must be updated",
     updating: "Verifying and applying the update",
     installing: "Verifying and installing the game files",
-    details: "Details"
+    details: "Details",
+    updateUnconfigured: "This launcher has no update endpoint configured",
+    switchLanguage: "Switch to Japanese"
   }
 };
 
@@ -60,7 +64,9 @@ function applyLanguage() {
   document.querySelectorAll("[data-i18n]").forEach(element => {
     element.textContent = tr(element.dataset.i18n);
   });
-  byId("language").textContent = language === "ja" ? "EN" : "日本語";
+  byId("language").textContent = language === "ja" ? "日本語" : "EN";
+  byId("language").setAttribute("aria-label", tr("switchLanguage"));
+  byId("language").title = tr("switchLanguage");
   renderUpdate();
 }
 
@@ -149,6 +155,12 @@ async function loadState() {
 }
 
 async function checkUpdate() {
+  if (state?.update_configuration !== "BMSIR_ARENA_UPDATE_CONFIGURED_V1") {
+    update = null;
+    setStatus(tr("updateUnconfigured"), "warning");
+    showError(tr("updateUnconfigured"));
+    return;
+  }
   setStatus(tr("checking"), "neutral");
   byId("check").disabled = true;
   try {

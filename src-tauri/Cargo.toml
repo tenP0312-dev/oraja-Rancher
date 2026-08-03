@@ -1,6 +1,6 @@
 [package]
 name = "bmsir-arena-launcher"
-version = "0.2.1"
+version = "0.2.2"
 description = "Secure updater and launcher for BMS-IR Arena oraja"
 authors = ["BMS-IR"]
 license = "GPL-3.0-only"

@@ -49,7 +49,10 @@ cargo build --release --locked
 ```
 
 CI uploads one short-lived, unsigned Windows validation executable. It does not
-build an installer or a distributable updater. Public stable distribution
-remains blocked until the reviewed production Ed25519 key and Authenticode
-signing are supplied. Internal test builds may use a disposable test key
-without per-build publication approval.
+build an installer or a distributable updater. A manually dispatched CI run
+also builds `BMS-IR Arena Test.exe` when `ARENA_TEST_UPDATE_BASE_URL` and
+`ARENA_TEST_RELEASE_PUBLIC_KEY` repository variables are present. That
+unsigned artifact is retained for one day and is only for the internal test
+channel. Public stable distribution remains blocked until the reviewed
+production Ed25519 key and Authenticode signing are supplied. Internal test
+builds may use a disposable test key without per-build publication approval.
