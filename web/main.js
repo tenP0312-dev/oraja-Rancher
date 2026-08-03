@@ -25,6 +25,7 @@ const dictionary = {
     details: "詳細",
     information: "お知らせ",
     noInformation: "現在のお知らせはありません",
+    policyInvalid: "保存された更新判定を検証できません。オンライン更新確認が必要です",
     updateUnconfigured: "このランチャーには更新先が設定されていません",
     switchLanguage: "英語に切り替え"
   },
@@ -52,6 +53,7 @@ const dictionary = {
     details: "Details",
     information: "Information",
     noInformation: "There are no current announcements",
+    policyInvalid: "The saved update policy is invalid. An online update check is required",
     updateUnconfigured: "This launcher has no update endpoint configured",
     switchLanguage: "Switch to Japanese"
   }
@@ -108,7 +110,10 @@ function renderSafeMarkdown(markdown) {
 }
 
 function canLaunch() {
-  return Boolean(state?.installation_ready) && !checking && !updateBlocksLaunch();
+  return Boolean(state?.installation_ready)
+    && !state?.cached_policy_invalid
+    && !checking
+    && !updateBlocksLaunch();
 }
 
 function updateBlocksLaunch() {
@@ -167,6 +172,10 @@ function renderUpdate() {
     return;
   }
   if (!update) {
+    if (state.cached_policy_invalid) {
+      setStatus(tr("policyInvalid"), "error");
+      return;
+    }
     setStatus(tr(updateUnavailable ? (installed ? "unavailable" : "unavailableNoInstall") : "current"), updateUnavailable ? "warning" : "ok");
     return;
   }
@@ -225,6 +234,7 @@ async function checkUpdate() {
   try {
     update = await invoke("check_online_update");
     state.cached_update = update;
+    state.cached_policy_invalid = false;
     hideError();
   } catch (error) {
     update = state.cached_update || update;

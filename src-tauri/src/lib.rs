@@ -19,6 +19,7 @@ struct LauncherState {
     installed_version: String,
     launcher_version: String,
     cached_update: Option<update::UpdateInfo>,
+    cached_policy_invalid: bool,
 }
 
 #[tauri::command]
@@ -26,14 +27,18 @@ fn launcher_state() -> Result<LauncherState, String> {
     let root = install::launcher_install_root().map_err(|error| error.to_string())?;
     let installation = install::inspect(&root).map_err(|error| error.to_string())?;
     let installation_ready = install::is_ready(&installation);
-    let cached_update =
-        update::cached_update(&root, installation_ready).map_err(|error| error.to_string())?;
+    let (cached_update, cached_policy_invalid) =
+        match update::cached_update(&root, installation_ready) {
+            Ok(update) => (update, false),
+            Err(_) => (None, true),
+        };
     Ok(LauncherState {
         channel: update::channel(),
         platform: update::platform().to_string(),
         installed_version: update::installed_version(&root),
         launcher_version: env!("CARGO_PKG_VERSION").to_string(),
         cached_update,
+        cached_policy_invalid,
         installation,
         installation_ready,
         update_configuration: update::CONFIGURATION_MARKER,

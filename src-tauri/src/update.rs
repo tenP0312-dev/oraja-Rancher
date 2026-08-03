@@ -733,6 +733,17 @@ mod tests {
         .unwrap();
         assert_eq!(current.status, "current");
         assert!(!update_blocks_launch(&current));
+
+        fs::write(root.path().join(CACHED_POLICY), "{}\n").unwrap();
+        assert!(cached_update_from(
+            root.path(),
+            true,
+            &STANDARD.encode(signing.verifying_key().to_bytes()),
+            "test",
+            "windows-x64",
+            "0.2.3",
+        )
+        .is_err());
     }
 
     #[test]
