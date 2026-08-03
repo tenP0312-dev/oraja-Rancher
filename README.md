@@ -1,41 +1,47 @@
-# BMS-IR Arena Launcher
+# BMS-IR Arena portable launcher
 
-Tauri 2 based launcher for the unified BMS-IR Arena oraja distribution.
-The current source version is `0.1.1`.
+`BMS-IR Arena.exe` is a portable Tauri 2 launcher. It uses the directory that
+contains the executable as the Arena oraja root. There is no installer, MSI,
+registry write, administrator requirement, Start Menu registration, or folder
+picker. Existing BAT launch remains valid.
 
-The launcher treats a release manifest as untrusted until its canonical JSON
-payload passes Ed25519 verification. Every staged artifact is then checked
-against its declared SHA-256 before an atomic install. Existing files are
-backed up and restored if any step fails.
+The window exposes three normal actions:
 
-Development builds are intentionally not production releases. Windows
-Authenticode and macOS Developer ID + notarization are required before a
-launcher artifact can be published as the official download.
+- launch Arena
+- open the existing pre-launch configuration with `-c`
+- check for updates
 
-The GUI detects the game body, rejects ambiguous duplicate BMS-IR plugin jars,
-accepts Java 21 or newer, launches configuration or play without shell
-interpolation, and can update INI values without rewriting unrelated comments
-or keys. A verified versioned plugin update moves the prior single plugin into
-the transaction backup before installing its replacement. Offline
-updates use the public key compiled as `BMSIR_ARENA_RELEASE_PUBLIC_KEY`; builds
-without that reviewed key fail closed when update is requested. A verified
-staged launcher can restart in helper mode, wait for the old process to exit,
-atomically replace itself, roll back on failure, and relaunch. Signed release
-notes are rendered with DOM text nodes and a small heading/list subset; release
-HTML is never executed.
+Update checks use the channel selected from the executable name. `BMS-IR
+Arena.exe` reads `stable`; `BMS-IR Arena Test.exe` reads `test`, so separate
+folders can coexist. Network failure never blocks a valid installed body.
+Optional updates retain a launch-current action; mandatory or revoked versions
+do not.
 
-`arena-launcher-ci.yml` creates short-lived unsigned validation bundles on
-Windows x64 and macOS arm64. Those artifacts are explicitly not releases.
-Official publication remains gated on platform signing/notarization and the
-compiled release-verification key.
+Rust downloads the platform manifest and artifacts. The WebView never chooses
+paths or verifies security metadata. The update is accepted only after the
+canonical manifest passes its compiled Ed25519 key and every file matches the
+signed path, size, and SHA-256. Files are staged under the portable root,
+backed up, replaced, and rolled back on failure. A launcher update starts the
+verified staged executable as a helper, waits for the old process, applies the
+same transaction, and then starts the game when requested.
 
-## Local checks
+The static patch publication tools and manifest layout are maintained in
+`tenP0312-dev/bms-ir-arena-patch-server`. Build variables are:
+
+- `BMSIR_ARENA_RELEASE_PUBLIC_KEY`: raw Ed25519 public key in Base64
+- `BMSIR_ARENA_UPDATE_BASE_URL`: HTTPS root containing `channels/`
+- `BMSIR_ARENA_CLIENT_VERSION`: initial body version when no local marker exists
+
+## Validation build
 
 ```sh
 cd src-tauri
-cargo test
-cargo check
+cargo test --locked
+cargo build --release --locked
 ```
 
-The static frontend lives in `web/`; no remote script or HTML release note is
-loaded.
+CI uploads only two short-lived, unsigned Windows portable executables. It does
+not build an installer. Public stable distribution remains blocked until the
+reviewed production Ed25519 key and Authenticode signing are supplied. Internal
+test builds may use a disposable test key without per-build publication
+approval.

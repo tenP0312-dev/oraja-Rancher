@@ -1,5 +1,6 @@
 use crate::manifest::{verify_file, ManifestError, ReleaseManifest};
 use serde::Serialize;
+use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -417,6 +418,7 @@ pub fn spawn_self_update(
     staging: &Path,
     manifest_path: &Path,
     manifest: &ReleaseManifest,
+    launch_after: bool,
 ) -> Result<(), InstallError> {
     let root = launcher_install_root()?;
     let launcher_path = launcher_artifact_path(&root, manifest)?;
@@ -428,6 +430,7 @@ pub fn spawn_self_update(
         .arg(staging)
         .arg(manifest_path)
         .arg(launcher_path)
+        .arg(if launch_after { "1" } else { "0" })
         .spawn()?;
     Ok(())
 }
@@ -437,19 +440,59 @@ pub fn run_self_update_helper(
     staging: &Path,
     manifest: &ReleaseManifest,
     launcher_path: &str,
+    launch_after: bool,
 ) -> Result<(), InstallError> {
     let mut last_error = None;
     for _ in 0..40 {
         thread::sleep(Duration::from_millis(250));
         match apply_staged(root, staging, manifest) {
             Ok(()) => {
-                Command::new(root.join(launcher_path)).spawn()?;
+                write_version_marker(root, &manifest.version)?;
+                if launch_after {
+                    let installation = inspect(root)?;
+                    let java = installation
+                        .java_runtime
+                        .as_deref()
+                        .map(Path::new)
+                        .ok_or(InstallError::UnsupportedJava)?;
+                    let game = installation
+                        .game_jar
+                        .as_deref()
+                        .map(Path::new)
+                        .ok_or(InstallError::InvalidRoot)?;
+                    launch(root, java, game, false)?;
+                } else {
+                    Command::new(root.join(launcher_path)).spawn()?;
+                }
                 return Ok(());
             }
             Err(error) => last_error = Some(error),
         }
     }
     Err(last_error.unwrap_or(InstallError::InvalidRoot))
+}
+
+pub fn write_version_marker(root: &Path, version: &str) -> Result<(), InstallError> {
+    let destination = root.join("bmsir-arena-version.txt");
+    fs::write(destination, format!("{}\n", version.trim()))?;
+    Ok(())
+}
+
+fn game_arguments(root: &Path, game_jar: &Path, configuration: bool) -> Vec<OsString> {
+    let mut arguments = vec![
+        OsString::from(format!(
+            "-DcustomIRDirectory={}",
+            root.join("ir").to_string_lossy()
+        )),
+        OsString::from("-Xms1g"),
+        OsString::from("-Xmx4g"),
+        OsString::from("-jar"),
+        game_jar.as_os_str().to_os_string(),
+    ];
+    if configuration {
+        arguments.push(OsString::from("-c"));
+    }
+    arguments
 }
 
 pub fn launch(
@@ -466,10 +509,9 @@ pub fn launch(
     }
     inspect_java(&java)?;
     let mut command = Command::new(java);
-    command.current_dir(&root).arg("-jar").arg(game_jar);
-    if configuration {
-        command.arg("-c");
-    }
+    command
+        .current_dir(&root)
+        .args(game_arguments(&root, &game_jar, configuration));
     command.spawn()?;
     Ok(())
 }
@@ -489,9 +531,13 @@ mod tests {
         let manifest = ReleaseManifest {
             schema_version: 1,
             channel: "stable".into(),
+            platform: "windows-x64".into(),
             version: "1".into(),
             published_at: "now".into(),
             release_notes_markdown: String::new(),
+            mandatory: false,
+            minimum_launcher_version: "0.1.0".into(),
+            revoked_versions: vec![],
             artifacts: vec![ReleaseArtifact {
                 path: "game.jar".into(),
                 sha256: format!("{:x}", Sha256::digest(b"new")),
@@ -518,9 +564,13 @@ mod tests {
         let manifest = ReleaseManifest {
             schema_version: 1,
             channel: "stable".into(),
+            platform: "windows-x64".into(),
             version: "1".into(),
             published_at: "now".into(),
             release_notes_markdown: String::new(),
+            mandatory: false,
+            minimum_launcher_version: "0.1.0".into(),
+            revoked_versions: vec![],
             artifacts: vec![],
             signature: String::new(),
         };
@@ -549,6 +599,28 @@ mod tests {
     }
 
     #[test]
+    fn portable_launch_keeps_bat_memory_and_plugin_arguments() {
+        let arguments = game_arguments(Path::new("arena root"), Path::new("beatoraja.jar"), true);
+        assert_eq!(arguments[0], "-DcustomIRDirectory=arena root/ir");
+        assert_eq!(arguments[1], "-Xms1g");
+        assert_eq!(arguments[2], "-Xmx4g");
+        assert_eq!(arguments[3], "-jar");
+        assert_eq!(arguments[4], "beatoraja.jar");
+        assert_eq!(arguments[5], "-c");
+    }
+
+    #[test]
+    fn version_marker_replaces_an_existing_version() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("bmsir-arena-version.txt"), "0.4.13\n").unwrap();
+        write_version_marker(root.path(), "0.4.14").unwrap();
+        assert_eq!(
+            fs::read_to_string(root.path().join("bmsir-arena-version.txt")).unwrap(),
+            "0.4.14\n"
+        );
+    }
+
+    #[test]
     fn active_plugin_artifact_must_be_directly_under_ir() {
         assert!(is_bmsir_plugin_path(Path::new(
             "IR/bms_ir_arena_0.0.70.jar"
@@ -569,9 +641,13 @@ mod tests {
         let manifest = ReleaseManifest {
             schema_version: 1,
             channel: "stable".into(),
+            platform: "windows-x64".into(),
             version: "1".into(),
             published_at: "now".into(),
             release_notes_markdown: String::new(),
+            mandatory: false,
+            minimum_launcher_version: "0.1.0".into(),
+            revoked_versions: vec![],
             artifacts: vec![ReleaseArtifact {
                 path: "ir/bms_ir_arena_0.0.70.jar".into(),
                 sha256: format!("{:x}", Sha256::digest(b"new")),
@@ -612,9 +688,13 @@ mod tests {
         let manifest = ReleaseManifest {
             schema_version: 1,
             channel: "stable".into(),
+            platform: "windows-x64".into(),
             version: "1".into(),
             published_at: "now".into(),
             release_notes_markdown: String::new(),
+            mandatory: false,
+            minimum_launcher_version: "0.1.0".into(),
+            revoked_versions: vec![],
             artifacts: vec![
                 ReleaseArtifact {
                     path: "ir/bms_ir_arena_0.0.70.jar".into(),
@@ -653,9 +733,13 @@ mod tests {
         let manifest = ReleaseManifest {
             schema_version: 1,
             channel: "stable".into(),
+            platform: "windows-x64".into(),
             version: "1".into(),
             published_at: "now".into(),
             release_notes_markdown: String::new(),
+            mandatory: false,
+            minimum_launcher_version: "0.1.0".into(),
+            revoked_versions: vec![],
             artifacts: vec![
                 ReleaseArtifact {
                     path: "ir/bms_ir_arena_0.0.70.jar".into(),
@@ -699,9 +783,13 @@ mod tests {
         let manifest = ReleaseManifest {
             schema_version: 1,
             channel: "stable".into(),
+            platform: "windows-x64".into(),
             version: "1".into(),
             published_at: "now".into(),
             release_notes_markdown: String::new(),
+            mandatory: false,
+            minimum_launcher_version: "0.1.0".into(),
+            revoked_versions: vec![],
             artifacts: vec![ReleaseArtifact {
                 path: "nested/ir/bms_ir_arena_0.0.70.jar".into(),
                 sha256: format!("{:x}", Sha256::digest(b"new")),
@@ -733,9 +821,13 @@ mod tests {
         let manifest = ReleaseManifest {
             schema_version: 1,
             channel: "stable".into(),
+            platform: "windows-x64".into(),
             version: "1".into(),
             published_at: "now".into(),
             release_notes_markdown: String::new(),
+            mandatory: false,
+            minimum_launcher_version: "0.1.0".into(),
+            revoked_versions: vec![],
             artifacts: vec![ReleaseArtifact {
                 path: "game.jar".into(),
                 sha256: "00".repeat(32),

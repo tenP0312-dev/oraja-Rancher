@@ -22,10 +22,18 @@ pub struct ReleaseArtifact {
 pub struct ReleaseManifest {
     pub schema_version: u32,
     pub channel: String,
+    #[serde(default)]
+    pub platform: String,
     pub version: String,
     pub published_at: String,
     #[serde(default)]
     pub release_notes_markdown: String,
+    #[serde(default)]
+    pub mandatory: bool,
+    #[serde(default)]
+    pub minimum_launcher_version: String,
+    #[serde(default)]
+    pub revoked_versions: Vec<String>,
     pub artifacts: Vec<ReleaseArtifact>,
     pub signature: String,
 }
@@ -60,6 +68,13 @@ pub fn verify_manifest(
     if manifest.schema_version != 1 {
         return Err(ManifestError::Schema);
     }
+    if !matches!(manifest.channel.as_str(), "stable" | "test")
+        || !matches!(manifest.platform.as_str(), "windows-x64" | "macos-arm64")
+        || manifest.version.trim().is_empty()
+        || manifest.published_at.trim().is_empty()
+    {
+        return Err(ManifestError::Schema);
+    }
     validate_artifacts(&manifest.artifacts)?;
 
     let mut unsigned: Value = serde_json::from_str(input)?;
@@ -91,6 +106,20 @@ pub fn validate_artifacts(artifacts: &[ReleaseArtifact]) -> Result<(), ManifestE
     let mut seen = std::collections::BTreeSet::new();
     for artifact in artifacts {
         let path = Path::new(&artifact.path);
+        let normalized = artifact.path.to_ascii_lowercase();
+        let first = normalized.split('/').next().unwrap_or("");
+        let file_name = normalized.rsplit('/').next().unwrap_or("");
+        let mutable_path = matches!(first, "player" | "bms" | "replay" | ".bmsir-update-staging")
+            || matches!(
+                file_name,
+                "config_sys.json"
+                    | "config_player.json"
+                    | "score.db"
+                    | "songdata.db"
+                    | "bmsir_maniac.db"
+                    | "bmsir_arena.json"
+                    | "bmsir-arena-version.txt"
+            );
         if artifact.path.is_empty()
             || artifact.path.contains('\\')
             || artifact.path.contains(':')
@@ -104,6 +133,7 @@ pub fn validate_artifacts(artifacts: &[ReleaseArtifact]) -> Result<(), ManifestE
             })
             || artifact.path == ".bmsir-launcher-backup"
             || artifact.path.starts_with(".bmsir-launcher-backup/")
+            || mutable_path
         {
             return Err(ManifestError::UnsafePath(artifact.path.clone()));
         }
@@ -152,9 +182,13 @@ mod tests {
         let mut value = json!({
             "schema_version": 1,
             "channel": "stable",
+            "platform": "windows-x64",
             "version": "0.4.0",
             "published_at": "2026-07-31T00:00:00Z",
             "release_notes_markdown": "## Arena 0.4.0\n- safe",
+            "mandatory": false,
+            "minimum_launcher_version": "0.1.0",
+            "revoked_versions": [],
             "artifacts": [{
                 "path": "BMS-IR-Arena-oraja.jar",
                 "sha256": "00".repeat(32),
@@ -212,5 +246,23 @@ mod tests {
             validate_artifacts(&case_duplicates),
             Err(ManifestError::DuplicatePath(_))
         ));
+        let mutable = ReleaseArtifact {
+            path: "player/player1/score.db".into(),
+            sha256: "00".repeat(32),
+            size: 0,
+            executable: false,
+        };
+        assert!(matches!(
+            validate_artifacts(&[mutable]),
+            Err(ManifestError::UnsafePath(_))
+        ));
+    }
+
+    #[test]
+    fn verifies_python_generated_canonical_manifest() {
+        let input = r###"{"artifacts":[{"executable":true,"path":"BMS-IR Arena Test.exe","sha256":"0000000000000000000000000000000000000000000000000000000000000000","size":123}],"channel":"test","mandatory":false,"minimum_launcher_version":"0.2.0","platform":"windows-x64","published_at":"2026-08-03T00:00:00Z","release_notes_markdown":"## テスト\n- portable","revoked_versions":[],"schema_version":1,"signature":"MLd6VQXHO8mRw2/ohlj0cnsFrowkLBElzOGFUiCbUvEvMefV63TkOopaXyb7nTbJQdpgCTniOhNAnK/Yj+TBBg==","version":"0.4.14"}"###;
+        let key = "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=";
+        let manifest = verify_manifest(input, key).unwrap();
+        assert_eq!(manifest.version, "0.4.14");
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "bmsir-arena-launcher"
-version = "0.1.1"
+version = "0.2.0"
 description = "Secure updater and launcher for BMS-IR Arena oraja"
 authors = ["BMS-IR"]
 license = "GPL-3.0-only"
@@ -26,8 +26,9 @@ serde_json = "1"
 serde_jcs = "0.1"
 sha2 = "0.10"
 tauri = { version = "2", features = [] }
-tauri-plugin-dialog = "2"
 thiserror = "2"
+ureq = { version = "2.12", default-features = false, features = ["tls"] }
+url = "2"
 
 [dev-dependencies]
 tempfile = "3"

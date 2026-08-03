@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "The launcher frontend can call only commands registered by this application.",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:allow-open"]
+  "permissions": ["core:default"]
 }

@@ -1,184 +1,65 @@
 const invoke = window.__TAURI__?.core?.invoke;
-const openDialog = window.__TAURI__?.dialog?.open;
+
 const dictionary = {
   ja: {
-    title: "Arena Launcher",
-    lead: "署名を検証して、安全に更新・設定・起動します。",
-    installation: "本体",
-    rootLabel: "BMS-IR Arena oraja フォルダ",
-    javaLabel: "Java 21以上（自動検出できない場合）",
-    browse: "参照",
-    inspect: "確認",
-    useJava: "使用",
-    actions: "起動",
-    configure: "設定を開く",
-    play: "ゲームを起動",
-    javaHint: "同梱Java 21を優先し、見つからない場合は指定されたJava 21以上を使用します。",
-    update: "オフライン更新",
-    updateText: "更新は内蔵Ed25519公開鍵と全ファイルのSHA-256が一致した場合だけ適用されます。失敗時はバックアップから復元します。",
-    stagingLabel: "更新ファイルのフォルダ",
-    manifestLabel: "署名済みmanifest.json",
-    inspectUpdate: "内容を確認",
-    applyUpdate: "検証して適用",
-    selfUpdate: "ランチャーを更新",
-    signing: "正式配布版はWindows AuthenticodeとmacOS Developer ID公証済みである必要があります。",
-    ini: "INI設定",
-    iniHint: "未知の項目・コメント・順序を保ったまま、指定した項目だけ更新します。",
-    iniKey: "SECTION.key",
-    iniValue: "value",
-    save: "保存",
-    ready: "本体とJava 21以上を確認しました。",
-    missingJava: "本体は見つかりましたが、Java 21以上を指定してください。",
-    invalid: "本体フォルダを確認できませんでした。",
-    javaReady: "Java 21以上を確認しました。",
-    updateDone: "更新を適用しました",
-    selfUpdateStarted: "ランチャーを終了し、安全な自己更新を開始します。",
-    iniDone: "INIを保存しました。"
+    checking: "更新を確認しています",
+    current: "最新です",
+    unavailable: "更新を確認できませんでした。現在の本体は起動できます",
+    invalid: "本体JARまたはJava 21以上を確認できません",
+    ready: "本体とJavaを確認しました",
+    play: "Arenaを起動",
+    configure: "起動前コンフィグ",
+    check: "更新を確認",
+    updateLaunch: "更新して起動",
+    launchCurrent: "現在の版を起動",
+    available: "BMS-IR Arena {version} が利用できます",
+    mandatory: "この更新は必須です",
+    revoked: "現在の版は停止されています。更新が必要です",
+    launcherOld: "ランチャーの更新が必要です",
+    updating: "更新ファイルを検証して適用しています",
+    details: "詳細"
   },
   en: {
-    title: "Arena Launcher",
-    lead: "Verify signatures, then update, configure, and launch safely.",
-    installation: "Installation",
-    rootLabel: "BMS-IR Arena oraja folder",
-    javaLabel: "Java 21 or newer (when automatic detection fails)",
-    browse: "Browse",
-    inspect: "Inspect",
-    useJava: "Use",
-    actions: "Launch",
-    configure: "Open configuration",
-    play: "Launch game",
-    javaHint: "Bundled Java 21 is preferred; otherwise select a Java 21 or newer executable.",
-    update: "Offline update",
-    updateText: "Updates are applied only after the built-in Ed25519 key and every SHA-256 match. A failed install is rolled back.",
-    stagingLabel: "Update files folder",
-    manifestLabel: "Signed manifest.json",
-    inspectUpdate: "Review",
-    applyUpdate: "Verify and apply",
-    selfUpdate: "Update launcher",
-    signing: "Official releases require Windows Authenticode and notarized macOS Developer ID signatures.",
-    ini: "INI settings",
-    iniHint: "Update only the requested value while preserving unknown keys, comments, and ordering.",
-    iniKey: "SECTION.key",
-    iniValue: "value",
-    save: "Save",
-    ready: "The game and Java 21 or newer are ready.",
-    missingJava: "The game was found, but Java 21 or newer must be selected.",
-    invalid: "The installation folder could not be verified.",
-    javaReady: "Java 21 or newer verified.",
-    updateDone: "Update applied",
-    selfUpdateStarted: "The launcher will exit and begin its verified self-update.",
-    iniDone: "INI saved."
+    checking: "Checking for updates",
+    current: "Up to date",
+    unavailable: "Could not check for updates. The installed version can still launch",
+    invalid: "The game JAR or Java 21+ could not be found",
+    ready: "Game and Java are ready",
+    play: "Launch Arena",
+    configure: "Pre-launch configuration",
+    check: "Check for updates",
+    updateLaunch: "Update and launch",
+    launchCurrent: "Launch installed version",
+    available: "BMS-IR Arena {version} is available",
+    mandatory: "This update is required",
+    revoked: "The installed version has been revoked and must be updated",
+    launcherOld: "The launcher must be updated",
+    updating: "Verifying and applying the update",
+    details: "Details"
   }
 };
 
-let language = "ja";
-let installation = null;
-
+let language = localStorage.getItem("bmsir-launcher-language") === "en" ? "en" : "ja";
+let state = null;
+let update = null;
 const byId = id => document.getElementById(id);
-const applyLanguage = () => {
+const tr = key => dictionary[language][key];
+
+function applyLanguage() {
   document.documentElement.lang = language;
   document.querySelectorAll("[data-i18n]").forEach(element => {
-    element.textContent = dictionary[language][element.dataset.i18n];
-  });
-  document.querySelectorAll("[data-i18n-placeholder]").forEach(element => {
-    element.placeholder = dictionary[language][element.dataset.i18nPlaceholder];
+    element.textContent = tr(element.dataset.i18n);
   });
   byId("language").textContent = language === "ja" ? "EN" : "日本語";
-};
-const setLaunchEnabled = enabled => {
-  byId("play").disabled = !enabled;
-  byId("configure").disabled = !enabled;
-  byId("apply-update").disabled = !installation
-    || !byId("staging").value
-    || !byId("manifest").value;
-  byId("inspect-update").disabled = !byId("manifest").value;
-  byId("self-update").disabled = !byId("staging").value
-    || !byId("manifest").value;
-};
-const choose = async (id, options) => {
-  if (!openDialog) return;
-  const selected = await openDialog({...options, multiple: false});
-  if (typeof selected === "string") {
-    byId(id).value = selected;
-    setLaunchEnabled(Boolean(installation?.java_runtime));
-  }
-};
+  renderUpdate();
+}
 
-byId("language").addEventListener("click", () => {
-  language = language === "ja" ? "en" : "ja";
-  applyLanguage();
-});
-byId("browse-root").addEventListener("click", () =>
-  choose("root", {directory: true})
-);
-byId("browse-staging").addEventListener("click", () =>
-  choose("staging", {directory: true})
-);
-byId("browse-java").addEventListener("click", () =>
-  choose("java", {directory: false})
-);
-byId("browse-manifest").addEventListener("click", () =>
-  choose("manifest", {directory: false, filters: [{name: "JSON", extensions: ["json"]}]})
-);
-byId("browse-ini").addEventListener("click", () =>
-  choose("ini-path", {directory: false, filters: [{name: "INI", extensions: ["ini"]}]})
-);
+function setStatus(text, kind = "neutral") {
+  byId("update-status").textContent = text;
+  byId("status-mark").dataset.kind = kind;
+}
 
-byId("inspect").addEventListener("click", async () => {
-  const status = byId("installation-status");
-  try {
-    if (!invoke) throw new Error("Tauri unavailable");
-    installation = await invoke("inspect_installation", {path: byId("root").value});
-    if (!installation.game_jar) throw new Error("game missing");
-    if (installation.java_runtime) {
-      byId("java").value = installation.java_runtime;
-      status.textContent = dictionary[language].ready;
-      setLaunchEnabled(true);
-    } else {
-      status.textContent = dictionary[language].missingJava;
-      setLaunchEnabled(false);
-    }
-  } catch (error) {
-    installation = null;
-    status.textContent = `${dictionary[language].invalid} ${error}`;
-    setLaunchEnabled(false);
-  }
-});
-
-byId("use-java").addEventListener("click", async () => {
-  try {
-    const javaVersion = await invoke("inspect_java", {path: byId("java").value});
-    if (!installation) throw new Error("inspect the game folder first");
-    installation.java_runtime = byId("java").value;
-    installation.java_source = "manual";
-    installation.java_version = javaVersion;
-    byId("installation-status").textContent = dictionary[language].javaReady;
-    setLaunchEnabled(true);
-  } catch (error) {
-    byId("installation-status").textContent = String(error);
-    setLaunchEnabled(false);
-  }
-});
-
-const launch = async configuration => {
-  if (!installation || !installation.java_runtime) return;
-  await invoke("launch_game", {
-    root: installation.root,
-    java: installation.java_runtime,
-    gameJar: installation.game_jar,
-    configuration
-  });
-};
-byId("play").addEventListener("click", () => launch(false));
-byId("configure").addEventListener("click", () => launch(true));
-
-["staging", "manifest"].forEach(id =>
-  byId(id).addEventListener("input", () =>
-    setLaunchEnabled(Boolean(installation?.java_runtime))
-  )
-);
-
-const renderSafeMarkdown = markdown => {
+function renderSafeMarkdown(markdown) {
   const target = byId("release-notes");
   target.replaceChildren();
   let list = null;
@@ -188,94 +69,126 @@ const renderSafeMarkdown = markdown => {
       list = null;
       return;
     }
-    let element;
-    if (line.startsWith("### ")) {
-      element = document.createElement("h4");
-      element.textContent = line.slice(4);
-      list = null;
-    } else if (line.startsWith("## ")) {
-      element = document.createElement("h3");
-      element.textContent = line.slice(3);
-      list = null;
-    } else if (line.startsWith("# ")) {
-      element = document.createElement("h2");
-      element.textContent = line.slice(2);
-      list = null;
-    } else if (/^[-*]\s+/.test(line)) {
+    if (/^[-*]\s+/.test(line)) {
       if (!list) {
         list = document.createElement("ul");
         target.append(list);
       }
-      element = document.createElement("li");
-      element.textContent = line.replace(/^[-*]\s+/, "");
-      list.append(element);
+      const item = document.createElement("li");
+      item.textContent = line.replace(/^[-*]\s+/, "");
+      list.append(item);
       return;
-    } else {
-      element = document.createElement("p");
-      element.textContent = line;
-      list = null;
     }
+    const element = document.createElement(line.startsWith("#") ? "h3" : "p");
+    element.textContent = line.replace(/^#{1,3}\s+/, "");
     target.append(element);
   });
-};
+}
 
-byId("inspect-update").addEventListener("click", async () => {
-  const status = byId("update-status");
-  try {
-    const release = await invoke("inspect_update_manifest", {
-      manifestPath: byId("manifest").value
-    });
-    renderSafeMarkdown(release.release_notes_markdown);
-    status.textContent = `${release.version} (${release.channel})`;
-  } catch (error) {
-    renderSafeMarkdown("");
-    status.textContent = String(error);
-  }
-});
+function canLaunch() {
+  return Boolean(state?.installation?.game_jar && state?.installation?.java_runtime);
+}
 
-byId("apply-update").addEventListener("click", async () => {
-  const status = byId("update-status");
-  try {
-    const release = await invoke("apply_offline_update", {
-      root: installation.root,
-      staging: byId("staging").value,
-      manifestPath: byId("manifest").value
-    });
-    renderSafeMarkdown(release.release_notes_markdown);
-    status.textContent = `${dictionary[language].updateDone}: ${release.version}`;
-    await byId("inspect").click();
-  } catch (error) {
-    status.textContent = String(error);
-  }
-});
+function renderUpdate() {
+  if (!state) return;
+  const ready = canLaunch();
+  byId("installation-status").textContent = ready ? tr("ready") : tr("invalid");
+  byId("play").disabled = !ready;
+  byId("configure").disabled = !ready;
+  byId("version").textContent = `${state.installed_version}  /  ${state.channel}`;
+  byId("update-panel").hidden = !update || update.status === "current";
+  if (!update) return;
 
-byId("self-update").addEventListener("click", async () => {
-  const status = byId("update-status");
-  try {
-    status.textContent = dictionary[language].selfUpdateStarted;
-    await invoke("begin_self_update", {
-      staging: byId("staging").value,
-      manifestPath: byId("manifest").value
-    });
-  } catch (error) {
-    status.textContent = String(error);
+  if (update.status === "current") {
+    setStatus(tr("current"), "ok");
+    return;
   }
-});
+  byId("available-title").textContent = tr("available").replace("{version}", update.available_version);
+  renderSafeMarkdown(update.release_notes_markdown);
+  const blocked = update.mandatory || update.status === "revoked" || update.status === "launcher_too_old";
+  byId("launch-current").disabled = blocked || !ready;
+  byId("play").disabled = blocked || !ready;
+  byId("configure").disabled = blocked || !ready;
+  if (update.status === "revoked") {
+    setStatus(tr("revoked"), "error");
+  } else if (update.status === "launcher_too_old") {
+    setStatus(tr("launcherOld"), "error");
+  } else if (update.mandatory) {
+    setStatus(tr("mandatory"), "warning");
+  } else {
+    setStatus(byId("available-title").textContent, "available");
+  }
+}
 
-byId("save-ini").addEventListener("click", async () => {
-  const status = byId("ini-status");
-  const key = byId("ini-key").value.trim();
+async function loadState() {
   try {
-    if (!key) throw new Error("key is required");
-    await invoke("update_ini", {
-      path: byId("ini-path").value,
-      updates: {[key]: byId("ini-value").value}
-    });
-    status.textContent = dictionary[language].iniDone;
+    if (!invoke) throw new Error("Tauri unavailable");
+    state = await invoke("launcher_state");
+    renderUpdate();
   } catch (error) {
-    status.textContent = String(error);
+    state = null;
+    setStatus(tr("invalid"), "error");
+    showError(error);
   }
+}
+
+async function checkUpdate() {
+  setStatus(tr("checking"), "neutral");
+  byId("check").disabled = true;
+  try {
+    update = await invoke("check_online_update");
+    hideError();
+    renderUpdate();
+  } catch (error) {
+    update = null;
+    setStatus(tr("unavailable"), "warning");
+    showError(error);
+  } finally {
+    byId("check").disabled = false;
+  }
+}
+
+function showError(error) {
+  byId("error-detail").textContent = String(error);
+  byId("details").hidden = false;
+}
+
+function hideError() {
+  byId("error-detail").textContent = "";
+  byId("details").hidden = true;
+}
+
+async function launch(configuration = false) {
+  try {
+    await invoke("launch_game", {configuration});
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function installAndLaunch() {
+  setStatus(tr("updating"), "available");
+  byId("update-launch").disabled = true;
+  try {
+    await invoke("install_online_update", {launchAfter: true});
+  } catch (error) {
+    byId("update-launch").disabled = false;
+    showError(error);
+    renderUpdate();
+  }
+}
+
+byId("language").addEventListener("click", () => {
+  language = language === "ja" ? "en" : "ja";
+  localStorage.setItem("bmsir-launcher-language", language);
+  applyLanguage();
 });
+byId("play").addEventListener("click", () => launch(false));
+byId("configure").addEventListener("click", () => launch(true));
+byId("check").addEventListener("click", checkUpdate);
+byId("update-launch").addEventListener("click", installAndLaunch);
+byId("launch-current").addEventListener("click", () => launch(false));
 
 applyLanguage();
-setLaunchEnabled(false);
+await loadState();
+if (canLaunch()) await checkUpdate();

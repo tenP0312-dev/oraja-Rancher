@@ -1,89 +1,108 @@
-mod ini;
 mod install;
 mod manifest;
+mod update;
 
 use install::InstallationInfo;
-use std::collections::BTreeMap;
+use serde::Serialize;
 use std::env;
 use std::fs;
 use std::path::Path;
 use tauri::AppHandle;
 
-#[tauri::command]
-fn inspect_installation(path: String) -> Result<InstallationInfo, String> {
-    install::inspect(Path::new(&path)).map_err(|error| error.to_string())
+#[derive(Debug, Serialize)]
+struct LauncherState {
+    installation: InstallationInfo,
+    channel: String,
+    platform: String,
+    installed_version: String,
+    launcher_version: String,
 }
 
 #[tauri::command]
-fn inspect_java(path: String) -> Result<u32, String> {
-    install::inspect_java(Path::new(&path)).map_err(|error| error.to_string())
+fn launcher_state() -> Result<LauncherState, String> {
+    let root = install::launcher_install_root().map_err(|error| error.to_string())?;
+    let installation = install::inspect(&root).map_err(|error| error.to_string())?;
+    Ok(LauncherState {
+        channel: update::channel(),
+        platform: update::platform().to_string(),
+        installed_version: update::installed_version(&root),
+        launcher_version: env!("CARGO_PKG_VERSION").to_string(),
+        installation,
+    })
 }
 
 #[tauri::command]
-fn update_ini(path: String, updates: BTreeMap<String, String>) -> Result<(), String> {
-    let source = fs::read_to_string(&path).map_err(|error| error.to_string())?;
-    let updated = ini::update_preserving_layout(&source, &updates);
-    let target = Path::new(&path);
-    let temporary = target.with_extension("bmsir-new");
-    fs::write(&temporary, updated).map_err(|error| error.to_string())?;
-    fs::rename(temporary, target).map_err(|error| error.to_string())
+async fn check_online_update() -> Result<update::UpdateInfo, String> {
+    let root = install::launcher_install_root().map_err(|error| error.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || update::check(&root))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-fn apply_offline_update(
-    root: String,
-    staging: String,
-    manifest_path: String,
-) -> Result<manifest::ReleaseManifest, String> {
-    let release = load_verified_manifest(&manifest_path)?;
-    install::apply_staged(Path::new(&root), Path::new(&staging), &release)
+async fn install_online_update(app: AppHandle, launch_after: bool) -> Result<(), String> {
+    let root = install::launcher_install_root().map_err(|error| error.to_string())?;
+    let prepare_root = root.clone();
+    let prepared = tauri::async_runtime::spawn_blocking(move || update::prepare(&prepare_root))
+        .await
+        .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())?;
-    Ok(release)
-}
 
-#[tauri::command]
-fn inspect_update_manifest(manifest_path: String) -> Result<manifest::ReleaseManifest, String> {
-    load_verified_manifest(&manifest_path)
-}
-
-#[tauri::command]
-fn begin_self_update(app: AppHandle, staging: String, manifest_path: String) -> Result<(), String> {
-    let release = load_verified_manifest(&manifest_path)?;
-    install::spawn_self_update(Path::new(&staging), Path::new(&manifest_path), &release)
+    if install::launcher_artifact_path(&root, &prepared.manifest).is_ok() {
+        install::spawn_self_update(
+            &prepared.staging,
+            &prepared.manifest_path,
+            &prepared.manifest,
+            launch_after,
+        )
         .map_err(|error| error.to_string())?;
-    app.exit(0);
+        app.exit(0);
+        return Ok(());
+    }
+
+    install::apply_staged(&root, &prepared.staging, &prepared.manifest)
+        .map_err(|error| error.to_string())?;
+    install::write_version_marker(&root, &prepared.manifest.version)
+        .map_err(|error| error.to_string())?;
+    if launch_after {
+        launch_detected(&root, false)?;
+        app.exit(0);
+    }
     Ok(())
 }
 
 #[tauri::command]
-fn launch_game(
-    root: String,
-    java: String,
-    game_jar: String,
-    configuration: bool,
-) -> Result<(), String> {
-    install::launch(
-        Path::new(&root),
-        Path::new(&java),
-        Path::new(&game_jar),
-        configuration,
-    )
-    .map_err(|error| error.to_string())
+fn launch_game(app: AppHandle, configuration: bool) -> Result<(), String> {
+    let root = install::launcher_install_root().map_err(|error| error.to_string())?;
+    launch_detected(&root, configuration)?;
+    app.exit(0);
+    Ok(())
+}
+
+fn launch_detected(root: &Path, configuration: bool) -> Result<(), String> {
+    let installation = install::inspect(root).map_err(|error| error.to_string())?;
+    let java = installation
+        .java_runtime
+        .as_deref()
+        .ok_or_else(|| "Java 21 or newer was not found".to_string())?;
+    let game = installation
+        .game_jar
+        .as_deref()
+        .ok_or_else(|| "Arena oraja JAR was not found".to_string())?;
+    install::launch(root, Path::new(java), Path::new(game), configuration)
+        .map_err(|error| error.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
-            inspect_installation,
-            inspect_java,
-            update_ini,
-            inspect_update_manifest,
-            apply_offline_update,
-            begin_self_update,
+            launcher_state,
+            check_online_update,
+            install_online_update,
             launch_game
         ])
-        .plugin(tauri_plugin_dialog::init())
         .run(tauri::generate_context!())
         .expect("BMS-IR Arena Launcher failed");
 }
@@ -119,6 +138,9 @@ pub fn run_self_update_helper_if_requested() -> bool {
         let launcher_path = arguments
             .next()
             .ok_or_else(|| "self-update launcher path is missing".to_string())?;
+        let launch_after = arguments
+            .next()
+            .is_some_and(|value| value == std::ffi::OsStr::new("1"));
         if arguments.next().is_some() {
             return Err("unexpected self-update arguments".to_string());
         }
@@ -137,6 +159,7 @@ pub fn run_self_update_helper_if_requested() -> bool {
             Path::new(&staging),
             &release,
             &launcher_path_text,
+            launch_after,
         )
         .map_err(|error| error.to_string())
     })();

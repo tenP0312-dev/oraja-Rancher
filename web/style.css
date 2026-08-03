@@ -1,92 +1,79 @@
 :root {
   font-family: Inter, "Noto Sans JP", system-ui, sans-serif;
-  color: #edf6ff;
-  background: #07111d;
+  color: #17211b;
+  background: #eef1ed;
 }
 * { box-sizing: border-box; }
-body {
-  margin: 0;
-  background:
-    radial-gradient(circle at 80% -10%, rgba(0, 187, 255, .22), transparent 42%),
-    linear-gradient(160deg, #06101b, #0c1d2d 58%, #07111d);
-}
+body { margin: 0; background: #eef1ed; }
 main {
   display: grid;
   gap: 18px;
-  width: min(100% - 32px, 860px);
+  width: min(100% - 32px, 560px);
   margin: 0 auto;
-  padding: 28px 0 40px;
+  padding: 30px 0;
 }
 header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 20px;
+  gap: 16px;
 }
-.eyebrow {
-  margin: 0;
-  color: #5ed5ff;
-  font-size: 12px;
-  font-weight: 900;
-  letter-spacing: .18em;
+h1 { margin: 0; font-size: 28px; letter-spacing: 0; }
+h2 { margin: 0 0 10px; font-size: 17px; letter-spacing: 0; }
+p { margin: 5px 0 0; color: #536058; }
+#version { font-family: ui-monospace, SFMono-Regular, monospace; font-size: 13px; }
+.status-band {
+  display: grid;
+  grid-template-columns: 14px 1fr;
+  gap: 12px;
+  align-items: start;
+  padding: 16px 0;
+  border-top: 1px solid #cbd2cc;
+  border-bottom: 1px solid #cbd2cc;
 }
-h1 { margin: 4px 0 6px; font-size: clamp(30px, 5vw, 48px); }
-.lead { margin: 0; color: #b7cce0; }
-section {
-  padding: 20px;
-  border: 1px solid rgba(131, 192, 229, .28);
-  border-radius: 16px;
-  background: rgba(8, 23, 37, .86);
-  box-shadow: 0 18px 50px rgba(0, 0, 0, .22);
+#status-mark {
+  width: 10px;
+  height: 10px;
+  margin-top: 4px;
+  border-radius: 50%;
+  background: #6b756e;
 }
-h2 { margin: 0 0 14px; font-size: 19px; }
-label { display: block; margin-bottom: 7px; font-weight: 700; }
-.row, .actions { display: flex; flex-wrap: wrap; gap: 10px; }
-input {
-  min-width: 0;
-  flex: 1;
-  padding: 12px 13px;
-  border: 1px solid #35546d;
-  border-radius: 9px;
-  color: inherit;
-  background: #071521;
-}
-.notes {
-  min-height: 0;
-  margin-top: 12px;
-  padding: 0 14px;
-  border-left: 3px solid #3d8fb7;
-  overflow-wrap: anywhere;
-}
-.notes:empty {
-  display: none;
-}
-.notes h2, .notes h3, .notes h4 {
-  margin: 12px 0 6px;
-}
-.notes p, .notes ul {
-  margin: 6px 0;
-}
-section > .row + label { margin-top: 14px; }
+#status-mark[data-kind="ok"] { background: #22834d; }
+#status-mark[data-kind="available"] { background: #1769aa; }
+#status-mark[data-kind="warning"] { background: #b96e00; }
+#status-mark[data-kind="error"] { background: #b43c3c; }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; }
 button {
-  padding: 11px 16px;
-  border: 1px solid #4a7897;
-  border-radius: 9px;
-  color: #f4faff;
-  background: #17354a;
-  font-weight: 800;
+  min-height: 42px;
+  padding: 9px 15px;
+  border: 1px solid #9da8a0;
+  border-radius: 6px;
+  color: #17211b;
+  background: #fff;
+  font: inherit;
+  font-weight: 700;
+  letter-spacing: 0;
   cursor: pointer;
 }
-button:hover:not(:disabled), button:focus-visible { border-color: #67dbff; }
-button:focus-visible, input:focus-visible { outline: 3px solid rgba(75, 205, 255, .45); outline-offset: 2px; }
+button:hover:not(:disabled), button:focus-visible { border-color: #23633f; }
+button:focus-visible { outline: 3px solid rgba(35, 99, 63, .2); outline-offset: 2px; }
 button:disabled { cursor: not-allowed; opacity: .45; }
-.primary { background: linear-gradient(135deg, #007cba, #00a6c8); }
-.secondary { background: #183043; }
-.status { min-height: 24px; margin-top: 10px; color: #9edfff; }
-.hint { color: #aac0d3; font-size: 13px; }
-.warning { color: #ffd594; }
-@media (max-width: 600px) {
-  .row, .actions { flex-direction: column; }
-  button { width: 100%; }
+.primary { border-color: #23633f; color: #fff; background: #23633f; }
+.quiet { background: transparent; }
+.update-panel {
+  padding: 16px;
+  border: 1px solid #aeb8b0;
+  border-left: 4px solid #1769aa;
+  background: #fff;
+}
+.notes { max-height: 190px; margin: 10px 0 15px; overflow: auto; }
+.notes h3 { margin: 10px 0 5px; font-size: 15px; }
+.notes p, .notes ul { margin: 5px 0; }
+details { border-top: 1px solid #cbd2cc; padding-top: 12px; }
+summary { cursor: pointer; font-weight: 700; }
+pre { overflow: auto; white-space: pre-wrap; color: #8b2929; }
+@media (max-width: 520px) {
+  .actions { flex-direction: column; }
+  .actions button { width: 100%; }
   #language { width: auto; }
 }
