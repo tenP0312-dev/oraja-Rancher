@@ -8,7 +8,7 @@ body { margin: 0; background: #eef1ed; }
 main {
   display: grid;
   gap: 16px;
-  width: min(100% - 32px, 600px);
+  width: min(calc(100% - 32px), 600px);
   margin: 0 auto;
   padding: 30px 0;
 }
@@ -60,6 +60,16 @@ button:focus-visible { outline: 3px solid rgba(35, 99, 63, .2); outline-offset: 
 button:disabled { cursor: not-allowed; opacity: .45; }
 .primary { border-color: #23633f; color: #fff; background: #23633f; }
 .quiet { background: transparent; }
+.language-button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 112px;
+  white-space: nowrap;
+}
+.language-icon { font-size: 18px; line-height: 1; }
 .information {
   min-height: 132px;
   padding-top: 14px;

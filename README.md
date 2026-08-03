@@ -30,9 +30,9 @@ subject to the Arena service compatibility gate.
 
 The signed manifest carries Japanese and English release notes plus up to 20
 newest-first announcements with an ISO date and title in both languages. The
-launcher switches this content with its `日本語` / `EN` control and keeps the
-announcement list visible even when the installed version is current. Legacy
-single-language release notes remain readable as a fallback.
+launcher switches this content with its `🌐 日本語` / `🌐 English` control and
+keeps the announcement list visible even when the installed version is current.
+Legacy single-language release notes remain readable as a fallback.
 
 Rust downloads the platform manifest and artifacts. The WebView never chooses
 paths or verifies security metadata. The update is accepted only after the

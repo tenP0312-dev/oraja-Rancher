@@ -72,7 +72,7 @@ function applyLanguage() {
   document.querySelectorAll("[data-i18n]").forEach(element => {
     element.textContent = tr(element.dataset.i18n);
   });
-  byId("language").textContent = language === "ja" ? "日本語" : "EN";
+  byId("language-label").textContent = language === "ja" ? "日本語" : "English";
   byId("language").setAttribute("aria-label", tr("switchLanguage"));
   byId("language").title = tr("switchLanguage");
   renderUpdate();
