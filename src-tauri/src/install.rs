@@ -601,7 +601,13 @@ mod tests {
     #[test]
     fn portable_launch_keeps_bat_memory_and_plugin_arguments() {
         let arguments = game_arguments(Path::new("arena root"), Path::new("beatoraja.jar"), true);
-        assert_eq!(arguments[0], "-DcustomIRDirectory=arena root/ir");
+        assert_eq!(
+            arguments[0],
+            OsString::from(format!(
+                "-DcustomIRDirectory={}",
+                Path::new("arena root").join("ir").to_string_lossy()
+            ))
+        );
         assert_eq!(arguments[1], "-Xms1g");
         assert_eq!(arguments[2], "-Xmx4g");
         assert_eq!(arguments[3], "-jar");
