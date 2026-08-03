@@ -18,6 +18,7 @@ struct LauncherState {
     platform: String,
     installed_version: String,
     launcher_version: String,
+    cached_update: Option<update::UpdateInfo>,
 }
 
 #[tauri::command]
@@ -25,11 +26,14 @@ fn launcher_state() -> Result<LauncherState, String> {
     let root = install::launcher_install_root().map_err(|error| error.to_string())?;
     let installation = install::inspect(&root).map_err(|error| error.to_string())?;
     let installation_ready = install::is_ready(&installation);
+    let cached_update =
+        update::cached_update(&root, installation_ready).map_err(|error| error.to_string())?;
     Ok(LauncherState {
         channel: update::channel(),
         platform: update::platform().to_string(),
         installed_version: update::installed_version(&root),
         launcher_version: env!("CARGO_PKG_VERSION").to_string(),
+        cached_update,
         installation,
         installation_ready,
         update_configuration: update::CONFIGURATION_MARKER,
@@ -94,6 +98,9 @@ async fn install_online_update(app: AppHandle, launch_after: bool) -> Result<(),
 #[tauri::command]
 fn launch_game(app: AppHandle, configuration: bool) -> Result<(), String> {
     let root = install::launcher_install_root().map_err(|error| error.to_string())?;
+    let installation = install::inspect(&root).map_err(|error| error.to_string())?;
+    update::enforce_cached_launch_policy(&root, install::is_ready(&installation))
+        .map_err(|error| error.to_string())?;
     launch_detected(&root, configuration)?;
     app.exit(0);
     Ok(())

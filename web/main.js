@@ -23,6 +23,8 @@ const dictionary = {
     updating: "更新ファイルを検証して適用しています",
     installing: "本体ファイルを検証してセットアップしています",
     details: "詳細",
+    information: "お知らせ",
+    noInformation: "現在のお知らせはありません",
     updateUnconfigured: "このランチャーには更新先が設定されていません",
     switchLanguage: "英語に切り替え"
   },
@@ -48,6 +50,8 @@ const dictionary = {
     updating: "Verifying and applying the update",
     installing: "Verifying and installing the game files",
     details: "Details",
+    information: "Information",
+    noInformation: "There are no current announcements",
     updateUnconfigured: "This launcher has no update endpoint configured",
     switchLanguage: "Switch to Japanese"
   }
@@ -56,6 +60,8 @@ const dictionary = {
 let language = localStorage.getItem("bmsir-launcher-language") === "en" ? "en" : "ja";
 let state = null;
 let update = null;
+let checking = true;
+let updateUnavailable = false;
 const byId = id => document.getElementById(id);
 const tr = key => dictionary[language][key];
 
@@ -102,33 +108,81 @@ function renderSafeMarkdown(markdown) {
 }
 
 function canLaunch() {
-  return Boolean(state?.installation_ready);
+  return Boolean(state?.installation_ready) && !checking && !updateBlocksLaunch();
+}
+
+function updateBlocksLaunch() {
+  if (!update) return false;
+  return update.status === "install_required"
+    || update.status === "revoked"
+    || update.status === "launcher_too_old"
+    || (update.status === "available" && update.mandatory);
+}
+
+function localizedReleaseNotes() {
+  if (!update) return "";
+  const localized = language === "ja"
+    ? update.release_notes_markdown_ja
+    : update.release_notes_markdown_en;
+  return localized || update.release_notes_markdown || "";
+}
+
+function renderAnnouncements() {
+  const target = byId("announcements");
+  target.replaceChildren();
+  const announcements = Array.isArray(update?.announcements) ? update.announcements : [];
+  if (!announcements.length) {
+    const empty = document.createElement("li");
+    empty.className = "empty-information";
+    empty.textContent = tr("noInformation");
+    target.append(empty);
+    return;
+  }
+  announcements.forEach(announcement => {
+    const item = document.createElement("li");
+    const date = document.createElement("time");
+    date.dateTime = announcement.date;
+    date.textContent = announcement.date.replaceAll("-", ".");
+    const title = document.createElement("span");
+    title.textContent = language === "ja" ? announcement.title_ja : announcement.title_en;
+    item.append(date, title);
+    target.append(item);
+  });
 }
 
 function renderUpdate() {
   if (!state) return;
-  const ready = canLaunch();
-  byId("installation-status").textContent = ready ? tr("ready") : tr("notInstalled");
-  byId("play").disabled = !ready;
-  byId("configure").disabled = !ready;
-  const version = ready ? state.installed_version : tr("notInstalled");
+  const installed = Boolean(state.installation_ready);
+  const blocked = updateBlocksLaunch();
+  byId("installation-status").textContent = installed ? tr("ready") : tr("notInstalled");
+  byId("play").disabled = !canLaunch();
+  byId("configure").disabled = !canLaunch();
+  byId("check").disabled = checking;
+  const version = installed ? state.installed_version : tr("notInstalled");
   byId("version").textContent = `${version}  /  ${state.channel}`;
   byId("update-panel").hidden = !update || update.status === "current";
-  if (!update) return;
+  renderAnnouncements();
+  if (checking) {
+    setStatus(tr("checking"), "neutral");
+    return;
+  }
+  if (!update) {
+    setStatus(tr(updateUnavailable ? (installed ? "unavailable" : "unavailableNoInstall") : "current"), updateUnavailable ? "warning" : "ok");
+    return;
+  }
 
   if (update.status === "current") {
-    setStatus(tr("current"), "ok");
+    setStatus(tr(updateUnavailable ? "unavailable" : "current"), updateUnavailable ? "warning" : "ok");
     return;
   }
   const installing = update.status === "install_required";
   const title = installing ? tr("installAvailable") : tr("available");
   byId("available-title").textContent = title.replace("{version}", update.available_version);
   byId("update-launch").textContent = installing ? tr("installLaunch") : tr("updateLaunch");
-  renderSafeMarkdown(update.release_notes_markdown);
-  const blocked = installing || update.mandatory || update.status === "revoked" || update.status === "launcher_too_old";
-  byId("launch-current").disabled = blocked || !ready;
-  byId("play").disabled = blocked || !ready;
-  byId("configure").disabled = blocked || !ready;
+  renderSafeMarkdown(localizedReleaseNotes());
+  byId("launch-current").disabled = blocked || !installed;
+  byId("play").disabled = blocked || !installed;
+  byId("configure").disabled = blocked || !installed;
   if (update.status === "revoked") {
     setStatus(tr("revoked"), "error");
   } else if (update.status === "launcher_too_old") {
@@ -146,6 +200,7 @@ async function loadState() {
   try {
     if (!invoke) throw new Error("Tauri unavailable");
     state = await invoke("launcher_state");
+    update = state.cached_update || null;
     renderUpdate();
   } catch (error) {
     state = null;
@@ -157,22 +212,27 @@ async function loadState() {
 async function checkUpdate() {
   if (state?.update_configuration !== "BMSIR_ARENA_UPDATE_CONFIGURED_V1") {
     update = null;
+    checking = false;
+    updateUnavailable = true;
+    renderUpdate();
     setStatus(tr("updateUnconfigured"), "warning");
     showError(tr("updateUnconfigured"));
     return;
   }
-  setStatus(tr("checking"), "neutral");
-  byId("check").disabled = true;
+  checking = true;
+  updateUnavailable = false;
+  renderUpdate();
   try {
     update = await invoke("check_online_update");
+    state.cached_update = update;
     hideError();
-    renderUpdate();
   } catch (error) {
-    update = null;
-    setStatus(tr(canLaunch() ? "unavailable" : "unavailableNoInstall"), "warning");
+    update = state.cached_update || update;
+    updateUnavailable = true;
     showError(error);
   } finally {
-    byId("check").disabled = false;
+    checking = false;
+    renderUpdate();
   }
 }
 

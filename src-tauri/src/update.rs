@@ -1,4 +1,4 @@
-use crate::manifest::{verify_file, verify_manifest, ReleaseManifest};
+use crate::manifest::{verify_file, verify_manifest, ReleaseAnnouncement, ReleaseManifest};
 use serde::Serialize;
 use std::cmp::Ordering;
 use std::fs;
@@ -12,6 +12,8 @@ const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 const VERSION_FILE: &str = "bmsir-arena-version.txt";
 const STAGING_DIRECTORY: &str = ".bmsir-update-staging";
 const STAGED_MANIFEST: &str = ".bmsir-update-manifest.json";
+const CACHED_POLICY: &str = ".bmsir-launcher-policy.json";
+const CACHED_POLICY_TEMPORARY: &str = ".bmsir-launcher-policy.tmp";
 const fn configured_value(value: Option<&str>) -> bool {
     match value {
         Some(value) => !value.is_empty(),
@@ -48,6 +50,8 @@ pub enum UpdateError {
     WrongTarget,
     #[error("update staging path is unsafe")]
     UnsafeStaging,
+    #[error("BMS-IR Arena {0} is a required update")]
+    RequiredUpdate(String),
     #[error(transparent)]
     Manifest(#[from] crate::manifest::ManifestError),
     #[error("I/O error: {0}")]
@@ -63,6 +67,9 @@ pub struct UpdateInfo {
     pub status: String,
     pub mandatory: bool,
     pub release_notes_markdown: String,
+    pub release_notes_markdown_ja: String,
+    pub release_notes_markdown_en: String,
+    pub announcements: Vec<ReleaseAnnouncement>,
 }
 
 #[derive(Debug, Clone)]
@@ -294,13 +301,13 @@ fn bootstrap_allowed_for_versions(
     revoked || (!installation_ready && compare_versions(installed, available) != Ordering::Greater)
 }
 
-pub fn check_installation(
-    root: &Path,
+fn update_info_from_release(
+    installed: String,
     installation_ready: bool,
+    launcher_version: &str,
+    release: &ReleaseManifest,
 ) -> Result<UpdateInfo, UpdateError> {
-    let installed = installed_version(root);
-    let (_input, release) = fetch_release()?;
-    if !installation_ready && !bootstrap_artifacts_present(&release) {
+    if !installation_ready && !bootstrap_artifacts_present(release) {
         return Err(UpdateError::IncompleteBootstrap);
     }
     let revoked = release
@@ -308,8 +315,7 @@ pub fn check_installation(
         .iter()
         .any(|value| value == &installed);
     let launcher_old =
-        compare_versions(env!("CARGO_PKG_VERSION"), &release.minimum_launcher_version)
-            == Ordering::Less;
+        compare_versions(launcher_version, &release.minimum_launcher_version) == Ordering::Less;
     let status = status_for_versions(
         &installed,
         &release.version,
@@ -317,6 +323,16 @@ pub fn check_installation(
         revoked,
         launcher_old,
     )?;
+    let release_notes_markdown_ja = if release.release_notes_markdown_ja.is_empty() {
+        release.release_notes_markdown.clone()
+    } else {
+        release.release_notes_markdown_ja.clone()
+    };
+    let release_notes_markdown_en = if release.release_notes_markdown_en.is_empty() {
+        release.release_notes_markdown.clone()
+    } else {
+        release.release_notes_markdown_en.clone()
+    };
     Ok(UpdateInfo {
         channel: release.channel.clone(),
         platform: release.platform.clone(),
@@ -325,7 +341,110 @@ pub fn check_installation(
         status: status.to_string(),
         mandatory: release.mandatory || revoked || launcher_old,
         release_notes_markdown: release.release_notes_markdown.clone(),
+        release_notes_markdown_ja,
+        release_notes_markdown_en,
+        announcements: release.announcements.clone(),
     })
+}
+
+fn update_blocks_launch(update: &UpdateInfo) -> bool {
+    matches!(
+        update.status.as_str(),
+        "install_required" | "revoked" | "launcher_too_old"
+    ) || (update.status == "available" && update.mandatory)
+}
+
+fn cache_verified_release(root: &Path, manifest_json: &str) -> Result<(), UpdateError> {
+    let target = root.join(CACHED_POLICY);
+    let temporary = root.join(CACHED_POLICY_TEMPORARY);
+    for path in [&target, &temporary] {
+        if path.exists() && path.symlink_metadata()?.file_type().is_symlink() {
+            return Err(UpdateError::UnsafeStaging);
+        }
+    }
+    fs::write(&temporary, manifest_json)?;
+    if target.exists() {
+        fs::remove_file(&target)?;
+    }
+    fs::rename(temporary, target)?;
+    Ok(())
+}
+
+fn cached_update_from(
+    root: &Path,
+    installation_ready: bool,
+    public_key: &str,
+    selected_channel: &str,
+    selected_platform: &str,
+    launcher_version: &str,
+) -> Result<Option<UpdateInfo>, UpdateError> {
+    let path = root.join(CACHED_POLICY);
+    if !path.exists() {
+        return Ok(None);
+    }
+    if path.symlink_metadata()?.file_type().is_symlink() {
+        return Err(UpdateError::UnsafeStaging);
+    }
+    if path.metadata()?.len() > MAX_MANIFEST_BYTES {
+        return Err(UpdateError::TooLarge);
+    }
+    let input = fs::read_to_string(path)?;
+    let release = verify_manifest(&input, public_key)?;
+    if release.channel != selected_channel || release.platform != selected_platform {
+        return Ok(None);
+    }
+    update_info_from_release(
+        installed_version(root),
+        installation_ready,
+        launcher_version,
+        &release,
+    )
+    .map(Some)
+}
+
+pub fn cached_update(
+    root: &Path,
+    installation_ready: bool,
+) -> Result<Option<UpdateInfo>, UpdateError> {
+    let Ok(public_key) = release_public_key() else {
+        return Ok(None);
+    };
+    cached_update_from(
+        root,
+        installation_ready,
+        public_key,
+        &channel(),
+        platform(),
+        env!("CARGO_PKG_VERSION"),
+    )
+}
+
+pub fn enforce_cached_launch_policy(
+    root: &Path,
+    installation_ready: bool,
+) -> Result<(), UpdateError> {
+    if let Some(update) = cached_update(root, installation_ready)? {
+        if update_blocks_launch(&update) {
+            return Err(UpdateError::RequiredUpdate(update.available_version));
+        }
+    }
+    Ok(())
+}
+
+pub fn check_installation(
+    root: &Path,
+    installation_ready: bool,
+) -> Result<UpdateInfo, UpdateError> {
+    let installed = installed_version(root);
+    let (input, release) = fetch_release()?;
+    let update = update_info_from_release(
+        installed,
+        installation_ready,
+        env!("CARGO_PKG_VERSION"),
+        &release,
+    )?;
+    cache_verified_release(root, &input)?;
+    Ok(update)
 }
 
 pub fn prepare(root: &Path, installation_ready: bool) -> Result<PreparedUpdate, UpdateError> {
@@ -524,6 +643,9 @@ mod tests {
             version: "0.4.14".into(),
             published_at: "now".into(),
             release_notes_markdown: String::new(),
+            release_notes_markdown_ja: String::new(),
+            release_notes_markdown_en: String::new(),
+            announcements: vec![],
             mandatory: false,
             minimum_launcher_version: "0.2.1".into(),
             revoked_versions: vec![],
@@ -554,6 +676,86 @@ mod tests {
         assert!(!bootstrap_allowed_for_versions(
             "0.4.15", "0.4.14", false, false
         ));
+    }
+
+    #[test]
+    fn cached_signed_mandatory_update_blocks_offline_launch() {
+        let signing = SigningKey::from_bytes(&[23_u8; 32]);
+        let mut manifest = json!({
+            "schema_version": 1,
+            "channel": "test",
+            "platform": "windows-x64",
+            "version": "0.4.14",
+            "published_at": "2026-08-03T00:00:00Z",
+            "release_notes_markdown": "",
+            "release_notes_markdown_ja": "## 必須更新",
+            "release_notes_markdown_en": "## Required update",
+            "announcements": [{
+                "date": "2026-08-03",
+                "title_ja": "更新のお知らせ",
+                "title_en": "Update notice"
+            }],
+            "mandatory": true,
+            "minimum_launcher_version": "0.2.0",
+            "revoked_versions": [],
+            "artifacts": []
+        });
+        let signature = signing.sign(&serde_jcs::to_vec(&manifest).unwrap());
+        manifest["signature"] = Value::String(STANDARD.encode(signature.to_bytes()));
+
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join(VERSION_FILE), "0.4.13\n").unwrap();
+        cache_verified_release(root.path(), &serde_json::to_string(&manifest).unwrap()).unwrap();
+        let update = cached_update_from(
+            root.path(),
+            true,
+            &STANDARD.encode(signing.verifying_key().to_bytes()),
+            "test",
+            "windows-x64",
+            "0.2.3",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(update.release_notes_markdown_ja, "## 必須更新");
+        assert_eq!(update.announcements[0].title_en, "Update notice");
+        assert!(update_blocks_launch(&update));
+
+        fs::write(root.path().join(VERSION_FILE), "0.4.14\n").unwrap();
+        let current = cached_update_from(
+            root.path(),
+            true,
+            &STANDARD.encode(signing.verifying_key().to_bytes()),
+            "test",
+            "windows-x64",
+            "0.2.3",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(current.status, "current");
+        assert!(!update_blocks_launch(&current));
+    }
+
+    #[test]
+    fn legacy_release_notes_fill_both_languages() {
+        let release = ReleaseManifest {
+            schema_version: 1,
+            channel: "test".into(),
+            platform: "windows-x64".into(),
+            version: "0.4.14".into(),
+            published_at: "now".into(),
+            release_notes_markdown: "Legacy notes".into(),
+            release_notes_markdown_ja: String::new(),
+            release_notes_markdown_en: String::new(),
+            announcements: vec![],
+            mandatory: false,
+            minimum_launcher_version: "0.2.0".into(),
+            revoked_versions: vec![],
+            artifacts: vec![],
+            signature: String::new(),
+        };
+        let update = update_info_from_release("0.4.13".into(), true, "0.2.3", &release).unwrap();
+        assert_eq!(update.release_notes_markdown_ja, "Legacy notes");
+        assert_eq!(update.release_notes_markdown_en, "Legacy notes");
     }
 
     #[test]
