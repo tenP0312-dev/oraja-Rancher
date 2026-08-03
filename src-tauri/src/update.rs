@@ -73,14 +73,11 @@ pub struct PreparedUpdate {
 }
 
 pub fn channel() -> String {
-    let executable = std::env::current_exe()
+    std::env::current_exe()
         .ok()
-        .and_then(|path| {
-            path.file_stem()
-                .map(|value| value.to_string_lossy().to_string())
-        })
-        .unwrap_or_default();
-    channel_from_name(&executable).to_string()
+        .map(|path| channel_from_executable_path(&path))
+        .unwrap_or("stable")
+        .to_string()
 }
 
 fn channel_from_name(name: &str) -> &'static str {
@@ -89,6 +86,27 @@ fn channel_from_name(name: &str) -> &'static str {
     } else {
         "stable"
     }
+}
+
+fn channel_from_executable_path(path: &Path) -> &'static str {
+    for ancestor in path.ancestors() {
+        if ancestor
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| value.eq_ignore_ascii_case("app"))
+        {
+            let app_name = ancestor
+                .file_stem()
+                .map(|value| value.to_string_lossy())
+                .unwrap_or_default();
+            return channel_from_name(&app_name);
+        }
+    }
+    let executable_name = path
+        .file_stem()
+        .map(|value| value.to_string_lossy())
+        .unwrap_or_default();
+    channel_from_name(&executable_name)
 }
 
 pub fn platform() -> &'static str {
@@ -451,6 +469,26 @@ mod tests {
         assert_eq!(channel_from_name("BMS-IR Arena"), "stable");
         assert_eq!(channel_from_name("BMS-IR Arena Test"), "test");
         assert_eq!(channel_from_name("contest"), "stable");
+    }
+
+    #[test]
+    fn macos_app_name_selects_channel_instead_of_inner_binary_name() {
+        assert_eq!(
+            channel_from_executable_path(Path::new(
+                "/Applications/BMS-IR Arena Test.app/Contents/MacOS/bmsir-arena-launcher"
+            )),
+            "test"
+        );
+        assert_eq!(
+            channel_from_executable_path(Path::new(
+                "/Applications/BMS-IR Arena.app/Contents/MacOS/bmsir-arena-launcher"
+            )),
+            "stable"
+        );
+        assert_eq!(
+            channel_from_executable_path(Path::new("C:/Arena/BMS-IR Arena Test.exe")),
+            "test"
+        );
     }
 
     #[test]

@@ -1,9 +1,10 @@
 # BMS-IR Arena portable launcher
 
-`BMS-IR Arena.exe` is a portable Tauri 2 launcher. It uses the directory that
-contains the executable as the Arena oraja root. There is no installer, MSI,
-registry write, administrator requirement, Start Menu registration, or folder
-picker. Existing BAT launch remains valid.
+`BMS-IR Arena.exe` and `BMS-IR Arena.app` are portable Tauri 2 launchers. They
+use the directory that contains the EXE or app bundle as the Arena oraja root.
+There is no installer, MSI, registry write, administrator requirement, Start
+Menu registration, or folder picker. Existing BAT and command launch remain
+valid.
 
 The window exposes three normal actions:
 
@@ -13,7 +14,8 @@ The window exposes three normal actions:
 
 Update checks use the channel selected from the executable name. `BMS-IR
 Arena.exe` reads `stable`; `BMS-IR Arena Test.exe` reads `test`, so separate
-folders can coexist. Network failure never blocks a valid installed body.
+folders can coexist. The equivalent macOS app bundle names select the same
+channels. Network failure never blocks a valid installed body.
 When the executable is placed in an otherwise empty directory, the launcher
 checks the selected channel immediately and offers the signed current release
 as an initial download even when its version matches the launcher's body
@@ -48,11 +50,12 @@ cargo test --locked
 cargo build --release --locked
 ```
 
-CI uploads one short-lived, unsigned Windows validation executable. It does not
-build an installer or a distributable updater. A manually dispatched CI run
-also builds `BMS-IR Arena Test.exe` when `ARENA_TEST_UPDATE_BASE_URL` and
-`ARENA_TEST_RELEASE_PUBLIC_KEY` repository variables are present. That
-unsigned artifact is retained for one day and is only for the internal test
-channel. Public stable distribution remains blocked until the reviewed
-production Ed25519 key and Authenticode signing are supplied. Internal test
-builds may use a disposable test key without per-build publication approval.
+CI uploads short-lived Windows and macOS validation outputs. It does not build
+an installer. A manually dispatched CI run also builds `BMS-IR Arena Test.exe`
+and an ad-hoc-signed `BMS-IR Arena Test.app` ZIP when
+`ARENA_TEST_UPDATE_BASE_URL` and `ARENA_TEST_RELEASE_PUBLIC_KEY` repository
+variables are present. Those artifacts are retained for one day and are only
+for the internal test channel. Public stable distribution remains blocked
+until the reviewed production Ed25519 key, Authenticode signing, and Apple
+Developer ID/notarization are supplied. Internal test builds may use a
+disposable test key without per-build publication approval.
