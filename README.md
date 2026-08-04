@@ -12,6 +12,10 @@ The window exposes three normal actions:
 - open the existing pre-launch configuration with `-c`
 - check for updates
 
+The dedicated game body is `Arena-oraja.jar`. Existing `beatoraja.jar` and
+versioned Arena oraja JARs remain launchable only as compatibility fallbacks;
+the updater never deletes or overwrites a user's ordinary `beatoraja.jar`.
+
 The header always identifies the installed body version, selected update
 channel, and launcher version separately. During an installation or update,
 the status band shows byte-accurate overall progress, transferred and total

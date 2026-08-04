@@ -1,4 +1,4 @@
-use crate::install::set_executable_if_requested;
+use crate::install::{set_executable_if_requested, CANONICAL_GAME_JAR};
 use crate::manifest::{
     verify_file, verify_manifest, ReleaseAnnouncement, ReleaseArtifact, ReleaseBootstrap,
     ReleaseManifest,
@@ -301,7 +301,8 @@ fn bootstrap_artifacts_present(release: &ReleaseManifest) -> bool {
                 .file_name()
                 .and_then(|value| value.to_str())
                 .is_some_and(|name| {
-                    name.contains("beatoraja")
+                    name == CANONICAL_GAME_JAR.to_ascii_lowercase()
+                        || name.contains("beatoraja")
                         || name.contains("lr2oraja")
                         || name.contains("bms-ir-arena")
                 })
@@ -1006,7 +1007,10 @@ mod tests {
             minimum_launcher_version: "0.2.1".into(),
             revoked_versions: vec![],
             bootstrap: None,
-            artifacts: vec![artifact("beatoraja.jar"), artifact("runtime/bin/java.exe")],
+            artifacts: vec![
+                artifact("Arena-oraja.jar"),
+                artifact("runtime/bin/java.exe"),
+            ],
             signature: String::new(),
         };
         assert!(!bootstrap_artifacts_present(&release));
@@ -1269,7 +1273,7 @@ mod tests {
     #[test]
     fn empty_root_downloads_a_complete_same_version_release() {
         let files = [
-            ("beatoraja.jar", b"body".as_slice()),
+            ("Arena-oraja.jar", b"body".as_slice()),
             ("runtime/bin/java.exe", b"java".as_slice()),
             ("ir/bms_ir_arena_oraja_0.0.69.jar", b"plugin".as_slice()),
         ];

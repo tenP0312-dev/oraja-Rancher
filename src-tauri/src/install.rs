@@ -10,6 +10,7 @@ use std::time::Duration;
 use thiserror::Error;
 
 const MINIMUM_JAVA_MAJOR: u32 = 21;
+pub(crate) const CANONICAL_GAME_JAR: &str = "Arena-oraja.jar";
 const UPDATE_STAGING_DIRECTORY: &str = ".bmsir-update-staging";
 const UPDATE_BACKUP_DIRECTORY: &str = ".bmsir-launcher-backup";
 const UPDATE_HELPER: &str = if cfg!(windows) {
@@ -66,7 +67,8 @@ pub fn inspect(root: &Path) -> Result<InstallationInfo, InstallError> {
                     .and_then(|value| value.to_str())
                     .is_some_and(|name| {
                         let lower = name.to_ascii_lowercase();
-                        lower.contains("lr2oraja")
+                        lower == CANONICAL_GAME_JAR.to_ascii_lowercase()
+                            || lower.contains("lr2oraja")
                             || lower.contains("beatoraja")
                             || lower.contains("bms-ir-arena")
                     })
@@ -113,14 +115,16 @@ fn game_jar_priority(path: &Path) -> (u8, String) {
         .and_then(|value| value.to_str())
         .unwrap_or_default()
         .to_ascii_lowercase();
-    let priority = if name == "beatoraja.jar" {
+    let priority = if name == CANONICAL_GAME_JAR.to_ascii_lowercase() {
         0
-    } else if name.contains("bms-ir-arena") {
+    } else if name == "beatoraja.jar" {
         1
-    } else if name.contains("lr2oraja") {
+    } else if name.contains("bms-ir-arena") {
         2
-    } else {
+    } else if name.contains("lr2oraja") {
         3
+    } else {
+        4
     };
     (priority, name)
 }
@@ -893,7 +897,8 @@ mod tests {
             b"versioned",
         )
         .unwrap();
-        let canonical = root.path().join("beatoraja.jar");
+        fs::write(root.path().join("beatoraja.jar"), b"old canonical").unwrap();
+        let canonical = root.path().join(CANONICAL_GAME_JAR);
         fs::write(&canonical, b"updated").unwrap();
 
         let installation = inspect(root.path()).unwrap();
@@ -902,8 +907,20 @@ mod tests {
     }
 
     #[test]
+    fn installation_keeps_legacy_beatoraja_jar_as_a_fallback() {
+        let root = tempfile::tempdir().unwrap();
+        let legacy = root.path().join("beatoraja.jar");
+        fs::write(&legacy, b"legacy").unwrap();
+
+        let installation = inspect(root.path()).unwrap();
+
+        assert_eq!(installation.game_jar.as_deref(), legacy.to_str());
+    }
+
+    #[test]
     fn portable_launch_keeps_bat_memory_and_plugin_arguments() {
-        let arguments = game_arguments(Path::new("arena root"), Path::new("beatoraja.jar"), true);
+        let arguments =
+            game_arguments(Path::new("arena root"), Path::new(CANONICAL_GAME_JAR), true);
         assert_eq!(
             arguments[0],
             OsString::from(format!(
@@ -914,14 +931,18 @@ mod tests {
         assert_eq!(arguments[1], "-Xms1g");
         assert_eq!(arguments[2], "-Xmx4g");
         assert_eq!(arguments[3], "-jar");
-        assert_eq!(arguments[4], "beatoraja.jar");
+        assert_eq!(arguments[4], CANONICAL_GAME_JAR);
         assert_eq!(arguments[5], "-c");
     }
 
     #[test]
     fn normal_launch_enters_music_select_directly() {
-        let arguments = game_arguments(Path::new("arena root"), Path::new("beatoraja.jar"), false);
-        assert_eq!(arguments[4], "beatoraja.jar");
+        let arguments = game_arguments(
+            Path::new("arena root"),
+            Path::new(CANONICAL_GAME_JAR),
+            false,
+        );
+        assert_eq!(arguments[4], CANONICAL_GAME_JAR);
         assert_eq!(arguments[5], "-s");
     }
 
