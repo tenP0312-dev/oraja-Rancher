@@ -84,4 +84,6 @@ variables are present. Those artifacts are retained for one day and are only
 for the internal test channel. Public stable distribution remains blocked
 until the reviewed production Ed25519 key, Authenticode signing, and Apple
 Developer ID/notarization are supplied. Internal test builds may use a
-disposable test key without per-build publication approval.
+disposable test key without per-build publication approval. CI downloads the
+official Tauri CLI 2.11.4 binary with a pinned SHA-256 instead of compiling the
+CLI for every clean runner.
