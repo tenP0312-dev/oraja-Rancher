@@ -89,3 +89,17 @@ Developer ID/notarization are supplied. Internal test builds may use a
 disposable test key without per-build publication approval. CI downloads the
 official Tauri CLI 2.11.4 binary with a pinned SHA-256 instead of compiling the
 CLI for every clean runner.
+
+## Internal development loop
+
+Use the macOS build as the normal implementation loop on the development Mac.
+Run the focused Rust tests, build the macOS launcher, and verify a sparse update
+in an isolated portable root. Do not rebuild both platforms after each edit.
+
+After the code is stable, dispatch the configured CI workflow once to build and
+validate both the Windows and macOS internal launchers. Run the complete
+empty-directory compressed bootstrap test only when bootstrap extraction,
+inventory verification, launcher self-update, post-update cleanup, or storage
+behavior changed. Ordinary UI and client fixes need only the sparse-update
+path. If final validation reveals a bug, fix it and repeat the affected check;
+the reduced loop must not be used to skip a real regression.
