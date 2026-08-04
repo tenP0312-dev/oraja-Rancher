@@ -84,8 +84,9 @@ async fn install_online_update(app: AppHandle, launch_after: bool) -> Result<(),
             prepared.verified_files_total,
         ),
     );
-    if install::staged_launcher_artifact_path(&root, &prepared.staging, &prepared.manifest).is_ok()
-    {
+    let staged_launcher =
+        install::staged_launcher_artifact_path(&root, &prepared.staging, &prepared.manifest);
+    if staged_launcher.is_ok() {
         install::spawn_self_update(
             &prepared.staging,
             &prepared.manifest_path,
@@ -104,6 +105,11 @@ async fn install_online_update(app: AppHandle, launch_after: bool) -> Result<(),
         );
         app.exit(0);
         return Ok(());
+    }
+    if prepared.bootstrap_install {
+        return Err(
+            "the signed bootstrap release does not contain the current launcher".to_string(),
+        );
     }
 
     let _ = app.emit(
