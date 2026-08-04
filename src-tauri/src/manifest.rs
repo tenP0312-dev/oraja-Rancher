@@ -8,10 +8,12 @@ use std::fs::File;
 use std::io::{self, Read};
 use std::path::Path;
 use thiserror::Error;
+use url::Url;
 
 const MAX_RELEASE_NOTES_BYTES: usize = 64 * 1024;
 const MAX_ANNOUNCEMENTS: usize = 20;
 const MAX_ANNOUNCEMENT_TITLE: usize = 200;
+const MAX_BOOTSTRAP_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ReleaseArtifact {
@@ -27,6 +29,14 @@ pub struct ReleaseAnnouncement {
     pub date: String,
     pub title_ja: String,
     pub title_en: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReleaseBootstrap {
+    pub url: String,
+    pub sha256: String,
+    pub size: u64,
+    pub artifacts: Vec<ReleaseArtifact>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -51,6 +61,8 @@ pub struct ReleaseManifest {
     pub minimum_launcher_version: String,
     #[serde(default)]
     pub revoked_versions: Vec<String>,
+    #[serde(default)]
+    pub bootstrap: Option<ReleaseBootstrap>,
     pub artifacts: Vec<ReleaseArtifact>,
     pub signature: String,
 }
@@ -93,6 +105,25 @@ pub fn verify_manifest(
         return Err(ManifestError::Schema);
     }
     validate_artifacts(&manifest.artifacts)?;
+    if let Some(bootstrap) = &manifest.bootstrap {
+        let url = Url::parse(&bootstrap.url).map_err(|_| ManifestError::Schema)?;
+        if url.scheme() != "https"
+            || url.host_str().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || bootstrap.size == 0
+            || bootstrap.size > MAX_BOOTSTRAP_BYTES
+            || bootstrap.sha256.len() != 64
+            || !bootstrap
+                .sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+            || bootstrap.artifacts.is_empty()
+        {
+            return Err(ManifestError::Schema);
+        }
+        validate_artifacts(&bootstrap.artifacts)?;
+    }
     validate_localized_content(&manifest)?;
 
     let mut unsigned: Value = serde_json::from_str(input)?;
@@ -270,6 +301,7 @@ mod tests {
             "mandatory": false,
             "minimum_launcher_version": "0.1.0",
             "revoked_versions": [],
+            "bootstrap": null,
             "artifacts": [{
                 "path": "BMS-IR-Arena-oraja.jar",
                 "sha256": "00".repeat(32),
@@ -317,6 +349,7 @@ mod tests {
             "mandatory": true,
             "minimum_launcher_version": "0.2.4",
             "revoked_versions": [],
+            "bootstrap": null,
             "artifacts": []
         });
         let signature = signing.sign(&serde_jcs::to_vec(&value).unwrap());

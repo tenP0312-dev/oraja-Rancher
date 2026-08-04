@@ -27,10 +27,15 @@ signed mandatory update, revocation, or minimum-launcher requirement has been
 verified, the launcher caches that signed policy and keeps blocking the old
 version during later network failures. The Rust launch command enforces the
 same decision as the WebView; disabling a button is not the security boundary.
-When the executable is placed in an otherwise empty directory, the launcher
-checks the selected channel immediately and offers the signed current release
-as an initial download even when its version matches the launcher's body
-version. A missing or incomplete body is never treated as already installed.
+For an existing installation, artifacts already matching the signed size,
+SHA-256, and executable flag are not downloaded or replaced. When the
+executable is placed in an otherwise empty directory, the launcher checks the
+selected channel immediately and offers the signed current release as an
+initial download even when its version matches the launcher's body version.
+Current manifests may provide one signed compressed bootstrap ZIP plus a full
+signed file inventory; the launcher verifies the ZIP, extracts only inventory
+paths, verifies every extracted file, and then applies any newer sparse delta.
+A missing or incomplete body is never treated as already installed.
 Optional updates retain a launch-current action; mandatory or revoked versions
 do not. A client that has never downloaded the mandatory policy is still
 subject to the Arena service compatibility gate.
@@ -70,8 +75,9 @@ cargo test --locked
 cargo build --release --locked
 ```
 
-CI uploads short-lived Windows and macOS validation outputs. It does not build
-an installer. A manually dispatched CI run also builds `BMS-IR Arena Test.exe`
+Pull-request CI tests and validates the ordinary portable outputs. It does not
+build an installer. A manually dispatched CI run builds only the configured
+`BMS-IR Arena Test.exe`
 and an ad-hoc-signed `BMS-IR Arena Test.app` ZIP when
 `ARENA_TEST_UPDATE_BASE_URL` and `ARENA_TEST_RELEASE_PUBLIC_KEY` repository
 variables are present. Those artifacts are retained for one day and are only

@@ -217,9 +217,11 @@ fn paths_refer_to_same_install_target(left: &Path, right: &Path) -> bool {
     }
 }
 
-fn manifest_plugin_path(manifest: &ReleaseManifest) -> Result<Option<&Path>, InstallError> {
+fn plugin_path_from_artifacts(
+    artifacts: &[crate::manifest::ReleaseArtifact],
+) -> Result<Option<&Path>, InstallError> {
     let mut plugins = Vec::new();
-    for artifact in &manifest.artifacts {
+    for artifact in artifacts {
         let path = Path::new(&artifact.path);
         if !has_bmsir_plugin_filename(path) {
             continue;
@@ -237,10 +239,95 @@ fn manifest_plugin_path(manifest: &ReleaseManifest) -> Result<Option<&Path>, Ins
     Ok(plugin)
 }
 
+fn effective_artifacts(manifest: &ReleaseManifest) -> Vec<crate::manifest::ReleaseArtifact> {
+    let mut artifacts = manifest
+        .bootstrap
+        .as_ref()
+        .map(|bootstrap| bootstrap.artifacts.clone())
+        .unwrap_or_default();
+    for replacement in &manifest.artifacts {
+        if let Some(index) = artifacts
+            .iter()
+            .position(|artifact| artifact.path.eq_ignore_ascii_case(&replacement.path))
+        {
+            artifacts[index] = replacement.clone();
+        } else {
+            artifacts.push(replacement.clone());
+        }
+    }
+    artifacts
+}
+
+fn verified_staged_path(
+    staging: &Path,
+    artifact: &crate::manifest::ReleaseArtifact,
+) -> Result<Option<PathBuf>, InstallError> {
+    let source = staging.join(&artifact.path);
+    if !source.exists() {
+        return Ok(None);
+    }
+    let canonical = source.canonicalize()?;
+    if !canonical.starts_with(staging)
+        || !canonical.is_file()
+        || source.symlink_metadata()?.file_type().is_symlink()
+    {
+        return Err(InstallError::UnsafeFilesystemPath);
+    }
+    verify_file(&canonical, artifact)?;
+    Ok(Some(canonical))
+}
+
+fn verify_installed_artifact(
+    root: &Path,
+    artifact: &crate::manifest::ReleaseArtifact,
+) -> Result<(), InstallError> {
+    let destination = root.join(&artifact.path);
+    ensure_destination_is_safe(root, &destination)?;
+    if !destination.is_file() || destination.symlink_metadata()?.file_type().is_symlink() {
+        return Err(InstallError::UnsafeFilesystemPath);
+    }
+    verify_file(&destination, artifact)?;
+    Ok(())
+}
+
+fn verified_update_artifacts(
+    root: &Path,
+    staging: &Path,
+    manifest: &ReleaseManifest,
+    bootstrap_install: bool,
+) -> Result<Vec<crate::manifest::ReleaseArtifact>, InstallError> {
+    let expected = if bootstrap_install {
+        effective_artifacts(manifest)
+    } else {
+        manifest.artifacts.clone()
+    };
+    let mut staged = Vec::new();
+    for artifact in expected {
+        if verified_staged_path(staging, &artifact)?.is_some() {
+            staged.push(artifact);
+        } else if bootstrap_install {
+            return Err(InstallError::InvalidRoot);
+        } else {
+            verify_installed_artifact(root, &artifact)?;
+        }
+    }
+    Ok(staged)
+}
+
+#[cfg(test)]
 pub fn apply_staged(
     root: &Path,
     staging: &Path,
     manifest: &ReleaseManifest,
+) -> Result<(), InstallError> {
+    apply_staged_mode(root, staging, manifest, false)
+}
+
+pub fn apply_staged_mode(
+    root: &Path,
+    staging: &Path,
+    manifest: &ReleaseManifest,
+    bootstrap_install: bool,
 ) -> Result<(), InstallError> {
     if !root.is_dir() || !staging.is_dir() {
         return Err(InstallError::InvalidRoot);
@@ -250,8 +337,8 @@ pub fn apply_staged(
     }
     let root = root.canonicalize()?;
     let staging = staging.canonicalize()?;
-    verify_staged(&staging, manifest)?;
-    let replacement_plugin = manifest_plugin_path(manifest)?.map(Path::to_path_buf);
+    let staged_artifacts = verified_update_artifacts(&root, &staging, manifest, bootstrap_install)?;
+    let replacement_plugin = plugin_path_from_artifacts(&staged_artifacts)?.map(Path::to_path_buf);
 
     let backup = root.join(".bmsir-launcher-backup");
     if backup.exists() {
@@ -278,7 +365,7 @@ pub fn apply_staged(
                 displaced_plugins.push((existing, backup_path));
             }
         }
-        for artifact in &manifest.artifacts {
+        for artifact in &staged_artifacts {
             let source = staging.join(&artifact.path);
             let destination = root.join(&artifact.path);
             ensure_destination_is_safe(&root, &destination)?;
@@ -329,22 +416,6 @@ pub fn apply_staged(
             }
         }
         return Err(error);
-    }
-    Ok(())
-}
-
-pub fn verify_staged(staging: &Path, manifest: &ReleaseManifest) -> Result<(), InstallError> {
-    let staging = staging.canonicalize()?;
-    for artifact in &manifest.artifacts {
-        let source = staging.join(&artifact.path);
-        let canonical = source.canonicalize()?;
-        if !canonical.starts_with(&staging)
-            || !canonical.is_file()
-            || source.symlink_metadata()?.file_type().is_symlink()
-        {
-            return Err(InstallError::UnsafeFilesystemPath);
-        }
-        verify_file(&canonical, artifact)?;
     }
     Ok(())
 }
@@ -405,8 +476,9 @@ pub fn launcher_install_root() -> Result<PathBuf, InstallError> {
         .ok_or(InstallError::InvalidRoot)
 }
 
-pub fn launcher_artifact_path(
+pub fn staged_launcher_artifact_path(
     root: &Path,
+    staging: &Path,
     manifest: &ReleaseManifest,
 ) -> Result<String, InstallError> {
     let executable = std::env::current_exe()?.canonicalize()?;
@@ -415,23 +487,32 @@ pub fn launcher_artifact_path(
         .strip_prefix(&root)
         .map_err(|_| InstallError::LauncherArtifactMissing)?;
     let normalized = relative.to_string_lossy().replace('\\', "/");
-    manifest
+    let artifact = manifest
         .artifacts
         .iter()
         .find(|artifact| artifact.path.eq_ignore_ascii_case(&normalized))
-        .map(|artifact| artifact.path.clone())
-        .ok_or(InstallError::LauncherArtifactMissing)
+        .ok_or(InstallError::LauncherArtifactMissing)?;
+    if verified_staged_path(&staging.canonicalize()?, artifact)?.is_none() {
+        return Err(InstallError::LauncherArtifactMissing);
+    }
+    Ok(artifact.path.clone())
 }
 
 pub fn spawn_self_update(
     staging: &Path,
     manifest_path: &Path,
     manifest: &ReleaseManifest,
+    bootstrap_install: bool,
     launch_after: bool,
 ) -> Result<(), InstallError> {
     let root = launcher_install_root()?;
-    let launcher_path = launcher_artifact_path(&root, manifest)?;
-    verify_staged(staging, manifest)?;
+    let launcher_path = staged_launcher_artifact_path(&root, staging, manifest)?;
+    verified_update_artifacts(
+        &root.canonicalize()?,
+        &staging.canonicalize()?,
+        manifest,
+        bootstrap_install,
+    )?;
     let staged_launcher = staging.join(&launcher_path).canonicalize()?;
     Command::new(staged_launcher)
         .arg("--apply-self-update")
@@ -439,6 +520,7 @@ pub fn spawn_self_update(
         .arg(staging)
         .arg(manifest_path)
         .arg(launcher_path)
+        .arg(if bootstrap_install { "1" } else { "0" })
         .arg(if launch_after { "1" } else { "0" })
         .spawn()?;
     Ok(())
@@ -449,12 +531,13 @@ pub fn run_self_update_helper(
     staging: &Path,
     manifest: &ReleaseManifest,
     launcher_path: &str,
+    bootstrap_install: bool,
     launch_after: bool,
 ) -> Result<(), InstallError> {
     let mut last_error = None;
     for _ in 0..40 {
         thread::sleep(Duration::from_millis(250));
-        match apply_staged(root, staging, manifest) {
+        match apply_staged_mode(root, staging, manifest, bootstrap_install) {
             Ok(()) => {
                 let installation = inspect(root)?;
                 if !is_ready(&installation) {
@@ -531,7 +614,7 @@ pub fn launch(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manifest::ReleaseArtifact;
+    use crate::manifest::{ReleaseArtifact, ReleaseBootstrap};
     use sha2::{Digest, Sha256};
 
     #[test]
@@ -553,6 +636,7 @@ mod tests {
             mandatory: false,
             minimum_launcher_version: "0.1.0".into(),
             revoked_versions: vec![],
+            bootstrap: None,
             artifacts: vec![ReleaseArtifact {
                 path: "game.jar".into(),
                 sha256: format!("{:x}", Sha256::digest(b"new")),
@@ -567,6 +651,100 @@ mod tests {
             fs::read(root.path().join(".bmsir-launcher-backup/game.jar")).unwrap(),
             b"old"
         );
+    }
+
+    #[test]
+    fn delta_install_skips_matching_files_that_were_not_staged() {
+        let root = tempfile::tempdir().unwrap();
+        let staging = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("same.dat"), b"same").unwrap();
+        fs::write(root.path().join("changed.dat"), b"old").unwrap();
+        fs::write(staging.path().join("changed.dat"), b"new").unwrap();
+        let artifact = |path: &str, bytes: &[u8]| ReleaseArtifact {
+            path: path.into(),
+            sha256: format!("{:x}", Sha256::digest(bytes)),
+            size: bytes.len() as u64,
+            executable: false,
+        };
+        let manifest = ReleaseManifest {
+            schema_version: 1,
+            channel: "test".into(),
+            platform: "windows-x64".into(),
+            version: "2".into(),
+            published_at: "now".into(),
+            release_notes_markdown: String::new(),
+            release_notes_markdown_ja: String::new(),
+            release_notes_markdown_en: String::new(),
+            announcements: vec![],
+            mandatory: false,
+            minimum_launcher_version: "0.2.8".into(),
+            revoked_versions: vec![],
+            bootstrap: None,
+            artifacts: vec![
+                artifact("same.dat", b"same"),
+                artifact("changed.dat", b"new"),
+            ],
+            signature: String::new(),
+        };
+
+        apply_staged_mode(root.path(), staging.path(), &manifest, false).unwrap();
+
+        assert_eq!(fs::read(root.path().join("same.dat")).unwrap(), b"same");
+        assert_eq!(fs::read(root.path().join("changed.dat")).unwrap(), b"new");
+        assert!(!root.path().join(".bmsir-launcher-backup/same.dat").exists());
+    }
+
+    #[test]
+    fn bootstrap_install_requires_full_effective_inventory() {
+        let root = tempfile::tempdir().unwrap();
+        let staging = tempfile::tempdir().unwrap();
+        fs::create_dir_all(staging.path().join("runtime/bin")).unwrap();
+        fs::create_dir_all(staging.path().join("ir")).unwrap();
+        fs::write(staging.path().join("Arena.jar"), b"new-body").unwrap();
+        fs::write(staging.path().join("runtime/bin/java.exe"), b"java").unwrap();
+        fs::write(staging.path().join("ir/bms_ir_arena.jar"), b"plugin").unwrap();
+        let artifact = |path: &str, bytes: &[u8], executable: bool| ReleaseArtifact {
+            path: path.into(),
+            sha256: format!("{:x}", Sha256::digest(bytes)),
+            size: bytes.len() as u64,
+            executable,
+        };
+        let manifest = ReleaseManifest {
+            schema_version: 1,
+            channel: "test".into(),
+            platform: "windows-x64".into(),
+            version: "2".into(),
+            published_at: "now".into(),
+            release_notes_markdown: String::new(),
+            release_notes_markdown_ja: String::new(),
+            release_notes_markdown_en: String::new(),
+            announcements: vec![],
+            mandatory: false,
+            minimum_launcher_version: "0.2.8".into(),
+            revoked_versions: vec![],
+            bootstrap: Some(ReleaseBootstrap {
+                url: "https://example.test/bootstrap.zip".into(),
+                sha256: "00".repeat(32),
+                size: 1,
+                artifacts: vec![
+                    artifact("Arena.jar", b"old-body", false),
+                    artifact("runtime/bin/java.exe", b"java", true),
+                    artifact("ir/bms_ir_arena.jar", b"plugin", false),
+                ],
+            }),
+            artifacts: vec![artifact("Arena.jar", b"new-body", false)],
+            signature: String::new(),
+        };
+
+        apply_staged_mode(root.path(), staging.path(), &manifest, true).unwrap();
+        assert_eq!(
+            fs::read(root.path().join("Arena.jar")).unwrap(),
+            b"new-body"
+        );
+
+        fs::remove_file(root.path().join("runtime/bin/java.exe")).unwrap();
+        fs::remove_file(staging.path().join("runtime/bin/java.exe")).unwrap();
+        assert!(apply_staged_mode(root.path(), staging.path(), &manifest, true).is_err());
     }
 
     #[test]
@@ -589,6 +767,7 @@ mod tests {
             mandatory: false,
             minimum_launcher_version: "0.1.0".into(),
             revoked_versions: vec![],
+            bootstrap: None,
             artifacts: vec![],
             signature: String::new(),
         };
@@ -675,6 +854,7 @@ mod tests {
             mandatory: false,
             minimum_launcher_version: "0.1.0".into(),
             revoked_versions: vec![],
+            bootstrap: None,
             artifacts: vec![ReleaseArtifact {
                 path: "ir/bms_ir_arena_0.0.70.jar".into(),
                 sha256: format!("{:x}", Sha256::digest(b"new")),
@@ -725,6 +905,7 @@ mod tests {
             mandatory: false,
             minimum_launcher_version: "0.1.0".into(),
             revoked_versions: vec![],
+            bootstrap: None,
             artifacts: vec![
                 ReleaseArtifact {
                     path: "ir/bms_ir_arena_0.0.70.jar".into(),
@@ -773,6 +954,7 @@ mod tests {
             mandatory: false,
             minimum_launcher_version: "0.1.0".into(),
             revoked_versions: vec![],
+            bootstrap: None,
             artifacts: vec![
                 ReleaseArtifact {
                     path: "ir/bms_ir_arena_0.0.70.jar".into(),
@@ -826,6 +1008,7 @@ mod tests {
             mandatory: false,
             minimum_launcher_version: "0.1.0".into(),
             revoked_versions: vec![],
+            bootstrap: None,
             artifacts: vec![ReleaseArtifact {
                 path: "nested/ir/bms_ir_arena_0.0.70.jar".into(),
                 sha256: format!("{:x}", Sha256::digest(b"new")),
@@ -867,6 +1050,7 @@ mod tests {
             mandatory: false,
             minimum_launcher_version: "0.1.0".into(),
             revoked_versions: vec![],
+            bootstrap: None,
             artifacts: vec![ReleaseArtifact {
                 path: "game.jar".into(),
                 sha256: "00".repeat(32),

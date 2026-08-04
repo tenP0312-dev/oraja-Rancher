@@ -78,19 +78,29 @@ async fn install_online_update(app: AppHandle, launch_after: bool) -> Result<(),
 
     let _ = app.emit(
         UPDATE_PROGRESS_EVENT,
-        update::UpdateProgress::completed("verifying", &prepared.manifest),
+        update::UpdateProgress::completed(
+            "verifying",
+            prepared.transfer_bytes_total,
+            prepared.verified_files_total,
+        ),
     );
-    if install::launcher_artifact_path(&root, &prepared.manifest).is_ok() {
+    if install::staged_launcher_artifact_path(&root, &prepared.staging, &prepared.manifest).is_ok()
+    {
         install::spawn_self_update(
             &prepared.staging,
             &prepared.manifest_path,
             &prepared.manifest,
+            prepared.bootstrap_install,
             launch_after,
         )
         .map_err(|error| error.to_string())?;
         let _ = app.emit(
             UPDATE_PROGRESS_EVENT,
-            update::UpdateProgress::completed("restarting", &prepared.manifest),
+            update::UpdateProgress::completed(
+                "restarting",
+                prepared.transfer_bytes_total,
+                prepared.verified_files_total,
+            ),
         );
         app.exit(0);
         return Ok(());
@@ -98,10 +108,19 @@ async fn install_online_update(app: AppHandle, launch_after: bool) -> Result<(),
 
     let _ = app.emit(
         UPDATE_PROGRESS_EVENT,
-        update::UpdateProgress::completed("applying", &prepared.manifest),
+        update::UpdateProgress::completed(
+            "applying",
+            prepared.transfer_bytes_total,
+            prepared.verified_files_total,
+        ),
     );
-    install::apply_staged(&root, &prepared.staging, &prepared.manifest)
-        .map_err(|error| error.to_string())?;
+    install::apply_staged_mode(
+        &root,
+        &prepared.staging,
+        &prepared.manifest,
+        prepared.bootstrap_install,
+    )
+    .map_err(|error| error.to_string())?;
     let installed = install::inspect(&root).map_err(|error| error.to_string())?;
     if !install::is_ready(&installed) {
         return Err(
@@ -186,12 +205,15 @@ pub fn run_self_update_helper_if_requested() -> bool {
         let launcher_path = arguments
             .next()
             .ok_or_else(|| "self-update launcher path is missing".to_string())?;
-        let launch_after = arguments
-            .next()
-            .is_some_and(|value| value == std::ffi::OsStr::new("1"));
-        if arguments.next().is_some() {
-            return Err("unexpected self-update arguments".to_string());
-        }
+        let remaining = arguments.collect::<Vec<_>>();
+        let (bootstrap_install, launch_after) = match remaining.as_slice() {
+            [launch_after] => (false, launch_after == std::ffi::OsStr::new("1")),
+            [bootstrap, launch_after] => (
+                bootstrap == std::ffi::OsStr::new("1"),
+                launch_after == std::ffi::OsStr::new("1"),
+            ),
+            _ => return Err("unexpected self-update arguments".to_string()),
+        };
         let manifest_path_text = manifest_path.to_string_lossy();
         let release = load_verified_manifest(&manifest_path_text)?;
         let launcher_path_text = launcher_path.to_string_lossy();
@@ -207,6 +229,7 @@ pub fn run_self_update_helper_if_requested() -> bool {
             Path::new(&staging),
             &release,
             &launcher_path_text,
+            bootstrap_install,
             launch_after,
         )
         .map_err(|error| error.to_string())

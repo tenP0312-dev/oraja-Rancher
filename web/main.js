@@ -30,8 +30,10 @@ const dictionary = {
     updateUnconfigured: "このランチャーには更新先が設定されていません",
     switchLanguage: "英語に切り替え",
     bodyVersion: "本体 {version} / {channel}",
+    notInstalledVersion: "未インストール",
     launcherVersion: "Launcher {version}",
     downloading: "本体をダウンロード中",
+    extracting: "本体を展開・検証中",
     verifying: "ダウンロードしたファイルを検証中",
     applying: "更新を適用中",
     restarting: "新しいランチャーを起動中",
@@ -65,8 +67,10 @@ const dictionary = {
     updateUnconfigured: "This launcher has no update endpoint configured",
     switchLanguage: "Switch to Japanese",
     bodyVersion: "Body {version} / {channel}",
+    notInstalledVersion: "Not installed",
     launcherVersion: "Launcher {version}",
     downloading: "Downloading game files",
+    extracting: "Extracting and verifying game files",
     verifying: "Verifying downloaded files",
     applying: "Applying update",
     restarting: "Starting the updated launcher",
@@ -214,7 +218,7 @@ function renderUpdate() {
   byId("play").disabled = !canLaunch();
   byId("configure").disabled = !canLaunch();
   byId("check").disabled = checking;
-  const version = installed ? state.installed_version : tr("notInstalled");
+  const version = installed ? state.installed_version : tr("notInstalledVersion");
   byId("version").textContent = tr("bodyVersion")
     .replace("{version}", version)
     .replace("{channel}", state.channel);

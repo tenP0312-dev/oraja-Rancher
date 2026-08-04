@@ -1,7 +1,11 @@
 use crate::install::set_executable_if_requested;
-use crate::manifest::{verify_file, verify_manifest, ReleaseAnnouncement, ReleaseManifest};
+use crate::manifest::{
+    verify_file, verify_manifest, ReleaseAnnouncement, ReleaseArtifact, ReleaseBootstrap,
+    ReleaseManifest,
+};
 use serde::Serialize;
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -15,6 +19,7 @@ const STAGING_DIRECTORY: &str = ".bmsir-update-staging";
 const STAGED_MANIFEST: &str = ".bmsir-update-manifest.json";
 const CACHED_POLICY: &str = ".bmsir-launcher-policy.json";
 const CACHED_POLICY_TEMPORARY: &str = ".bmsir-launcher-policy.tmp";
+const BOOTSTRAP_ARCHIVE: &str = ".bmsir-bootstrap.zip";
 const DOWNLOAD_ATTEMPTS: usize = 4;
 const PROGRESS_BYTES_STEP: u64 = 1024 * 1024;
 const fn configured_value(value: Option<&str>) -> bool {
@@ -53,6 +58,8 @@ pub enum UpdateError {
     WrongTarget,
     #[error("update staging path is unsafe")]
     UnsafeStaging,
+    #[error("bootstrap archive is invalid: {0}")]
+    Archive(#[from] zip::result::ZipError),
     #[error("BMS-IR Arena {0} is a required update")]
     RequiredUpdate(String),
     #[error(transparent)]
@@ -80,6 +87,9 @@ pub struct PreparedUpdate {
     pub manifest: ReleaseManifest,
     pub staging: PathBuf,
     pub manifest_path: PathBuf,
+    pub bootstrap_install: bool,
+    pub transfer_bytes_total: u64,
+    pub verified_files_total: u64,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -92,8 +102,7 @@ pub struct UpdateProgress {
 }
 
 impl UpdateProgress {
-    pub fn completed(phase: &str, release: &ReleaseManifest) -> Self {
-        let (bytes_total, files_total) = release_totals(release);
+    pub fn completed(phase: &str, bytes_total: u64, files_total: u64) -> Self {
         Self {
             phase: phase.to_string(),
             bytes_done: bytes_total,
@@ -102,16 +111,6 @@ impl UpdateProgress {
             files_total,
         }
     }
-}
-
-fn release_totals(release: &ReleaseManifest) -> (u64, u64) {
-    (
-        release
-            .artifacts
-            .iter()
-            .fold(0_u64, |total, artifact| total.saturating_add(artifact.size)),
-        release.artifacts.len() as u64,
-    )
 }
 
 pub fn channel() -> String {
@@ -286,7 +285,12 @@ fn bootstrap_artifacts_present(release: &ReleaseManifest) -> bool {
     let mut body = false;
     let mut java = false;
     let mut plugin = false;
-    for artifact in &release.artifacts {
+    let artifacts = release
+        .bootstrap
+        .as_ref()
+        .map(|bootstrap| bootstrap.artifacts.as_slice())
+        .unwrap_or(release.artifacts.as_slice());
+    for artifact in artifacts {
         let normalized = artifact.path.replace('\\', "/").to_ascii_lowercase();
         let path = Path::new(&normalized);
         if path
@@ -501,6 +505,214 @@ pub fn check_installation(
     Ok(update)
 }
 
+fn artifact_matches(root: &Path, artifact: &ReleaseArtifact) -> bool {
+    let path = root.join(&artifact.path);
+    if !path.is_file()
+        || path
+            .symlink_metadata()
+            .is_ok_and(|metadata| metadata.file_type().is_symlink())
+    {
+        return false;
+    }
+    if cfg!(unix) && artifact.executable {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if path
+                .metadata()
+                .is_ok_and(|metadata| metadata.permissions().mode() & 0o111 == 0)
+            {
+                return false;
+            }
+        }
+    }
+    verify_file(&path, artifact).is_ok()
+}
+
+fn artifacts_match(left: &ReleaseArtifact, right: &ReleaseArtifact) -> bool {
+    left.path.eq_ignore_ascii_case(&right.path)
+        && left.sha256.eq_ignore_ascii_case(&right.sha256)
+        && left.size == right.size
+        && left.executable == right.executable
+}
+
+fn bootstrap_delta_artifacts(release: &ReleaseManifest) -> Vec<ReleaseArtifact> {
+    let Some(bootstrap) = &release.bootstrap else {
+        return release.artifacts.clone();
+    };
+    release
+        .artifacts
+        .iter()
+        .filter(|artifact| {
+            !bootstrap
+                .artifacts
+                .iter()
+                .any(|base| artifacts_match(base, artifact))
+        })
+        .cloned()
+        .collect()
+}
+
+fn effective_file_count(release: &ReleaseManifest, bootstrap_install: bool) -> u64 {
+    if !bootstrap_install {
+        return release.artifacts.len() as u64;
+    }
+    let mut paths = release
+        .bootstrap
+        .as_ref()
+        .map(|bootstrap| {
+            bootstrap
+                .artifacts
+                .iter()
+                .map(|artifact| artifact.path.to_ascii_lowercase())
+                .collect::<std::collections::BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    paths.extend(
+        release
+            .artifacts
+            .iter()
+            .map(|artifact| artifact.path.to_ascii_lowercase()),
+    );
+    paths.len() as u64
+}
+
+fn download_to_path<F>(
+    url: &Url,
+    destination: &Path,
+    expected_size: u64,
+    bytes_done: &mut u64,
+    bytes_total: u64,
+    files_done: u64,
+    files_total: u64,
+    progress: &mut F,
+) -> Result<(), UpdateError>
+where
+    F: FnMut(UpdateProgress),
+{
+    let response = fetch_response(url)?;
+    let mut reader = response.into_reader().take(expected_size + 1);
+    let mut target = fs::File::create(destination)?;
+    let mut copied = 0_u64;
+    let mut last_reported_bytes = *bytes_done;
+    let mut buffer = [0_u8; 256 * 1024];
+    loop {
+        let count = reader.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        target.write_all(&buffer[..count])?;
+        copied = copied.saturating_add(count as u64);
+        *bytes_done = (*bytes_done).saturating_add(count as u64);
+        if (*bytes_done).saturating_sub(last_reported_bytes) >= PROGRESS_BYTES_STEP {
+            progress(UpdateProgress {
+                phase: "downloading".to_string(),
+                bytes_done: (*bytes_done).min(bytes_total),
+                bytes_total,
+                files_done,
+                files_total,
+            });
+            last_reported_bytes = *bytes_done;
+        }
+    }
+    target.flush()?;
+    if copied != expected_size {
+        return Err(if copied > expected_size {
+            UpdateError::TooLarge
+        } else {
+            UpdateError::Incomplete
+        });
+    }
+    Ok(())
+}
+
+fn bootstrap_archive_artifact(bootstrap: &ReleaseBootstrap) -> ReleaseArtifact {
+    ReleaseArtifact {
+        path: BOOTSTRAP_ARCHIVE.to_string(),
+        sha256: bootstrap.sha256.clone(),
+        size: bootstrap.size,
+        executable: false,
+    }
+}
+
+fn extract_bootstrap_archive<F>(
+    archive_path: &Path,
+    staging: &Path,
+    bootstrap: &ReleaseBootstrap,
+    bytes_done: u64,
+    bytes_total: u64,
+    progress: &mut F,
+) -> Result<(), UpdateError>
+where
+    F: FnMut(UpdateProgress),
+{
+    let mut expected = bootstrap
+        .artifacts
+        .iter()
+        .map(|artifact| (artifact.path.to_ascii_lowercase(), artifact))
+        .collect::<HashMap<_, _>>();
+    let mut archive = zip::ZipArchive::new(fs::File::open(archive_path)?)?;
+    let files_total = expected.len() as u64;
+    let mut files_done = 0_u64;
+    progress(UpdateProgress {
+        phase: "extracting".to_string(),
+        bytes_done,
+        bytes_total,
+        files_done,
+        files_total,
+    });
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index)?;
+        let enclosed = entry
+            .enclosed_name()
+            .ok_or(UpdateError::IncompleteBootstrap)?;
+        if entry.name().contains('\\')
+            || entry
+                .unix_mode()
+                .is_some_and(|mode| mode & 0o170000 == 0o120000)
+        {
+            return Err(UpdateError::IncompleteBootstrap);
+        }
+        if entry.is_dir() {
+            continue;
+        }
+        let relative = enclosed.to_string_lossy().replace('\\', "/");
+        if relative.eq_ignore_ascii_case(VERSION_FILE) {
+            continue;
+        }
+        let artifact = expected
+            .remove(&relative.to_ascii_lowercase())
+            .ok_or(UpdateError::IncompleteBootstrap)?;
+        if entry.size() != artifact.size {
+            return Err(UpdateError::IncompleteBootstrap);
+        }
+        let destination = staging.join(&artifact.path);
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut target = fs::File::create(&destination)?;
+        let copied = io::copy(&mut entry, &mut target)?;
+        target.flush()?;
+        if copied != artifact.size {
+            return Err(UpdateError::IncompleteBootstrap);
+        }
+        verify_file(&destination, artifact)?;
+        set_executable_if_requested(&destination, artifact.executable)?;
+        files_done += 1;
+        progress(UpdateProgress {
+            phase: "extracting".to_string(),
+            bytes_done,
+            bytes_total,
+            files_done,
+            files_total,
+        });
+    }
+    if !expected.is_empty() {
+        return Err(UpdateError::IncompleteBootstrap);
+    }
+    Ok(())
+}
+
 pub fn prepare_with_progress<F>(
     root: &Path,
     installation_ready: bool,
@@ -566,10 +778,34 @@ where
     }
     fs::create_dir_all(&staging)?;
 
-    let (bytes_total, files_total) = release_totals(&release);
+    let bootstrap_install = !installation_ready;
+    let bootstrap = if bootstrap_install {
+        release.bootstrap.as_ref()
+    } else {
+        None
+    };
+    let download_artifacts = if bootstrap.is_some() {
+        bootstrap_delta_artifacts(&release)
+            .into_iter()
+            .collect::<Vec<_>>()
+    } else if bootstrap_install {
+        release.artifacts.clone()
+    } else {
+        release
+            .artifacts
+            .iter()
+            .filter(|artifact| !artifact_matches(&root, artifact))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let bytes_total = bootstrap.map_or(0, |value| value.size).saturating_add(
+        download_artifacts
+            .iter()
+            .fold(0_u64, |total, artifact| total.saturating_add(artifact.size)),
+    );
+    let files_total = download_artifacts.len() as u64 + u64::from(bootstrap.is_some());
     let mut bytes_done = 0_u64;
     let mut files_done = 0_u64;
-    let mut last_reported_bytes = 0_u64;
     progress(UpdateProgress {
         phase: "downloading".to_string(),
         bytes_done,
@@ -578,7 +814,40 @@ where
         files_total,
     });
 
-    for artifact in &release.artifacts {
+    if let Some(bootstrap) = bootstrap {
+        let archive_path = staging.join(BOOTSTRAP_ARCHIVE);
+        let url = Url::parse(&bootstrap.url).map_err(|_| UpdateError::Url)?;
+        download_to_path(
+            &url,
+            &archive_path,
+            bootstrap.size,
+            &mut bytes_done,
+            bytes_total,
+            files_done,
+            files_total,
+            &mut progress,
+        )?;
+        verify_file(&archive_path, &bootstrap_archive_artifact(bootstrap))?;
+        files_done += 1;
+        progress(UpdateProgress {
+            phase: "downloading".to_string(),
+            bytes_done: bytes_done.min(bytes_total),
+            bytes_total,
+            files_done,
+            files_total,
+        });
+        extract_bootstrap_archive(
+            &archive_path,
+            &staging,
+            bootstrap,
+            bytes_done,
+            bytes_total,
+            &mut progress,
+        )?;
+        fs::remove_file(archive_path)?;
+    }
+
+    for artifact in &download_artifacts {
         let destination = staging.join(&artifact.path);
         if let Some(parent) = destination.parent() {
             fs::create_dir_all(parent)?;
@@ -593,38 +862,16 @@ where
         ];
         url_segments.extend(segments);
         let url = append_url(base_url, &url_segments)?;
-        let response = fetch_response(&url)?;
-        let mut reader = response.into_reader().take(artifact.size + 1);
-        let mut target = fs::File::create(&destination)?;
-        let mut copied = 0_u64;
-        let mut buffer = [0_u8; 256 * 1024];
-        loop {
-            let count = reader.read(&mut buffer)?;
-            if count == 0 {
-                break;
-            }
-            target.write_all(&buffer[..count])?;
-            copied = copied.saturating_add(count as u64);
-            bytes_done = bytes_done.saturating_add(count as u64);
-            if bytes_done.saturating_sub(last_reported_bytes) >= PROGRESS_BYTES_STEP {
-                progress(UpdateProgress {
-                    phase: "downloading".to_string(),
-                    bytes_done: bytes_done.min(bytes_total),
-                    bytes_total,
-                    files_done,
-                    files_total,
-                });
-                last_reported_bytes = bytes_done;
-            }
-        }
-        target.flush()?;
-        if copied != artifact.size {
-            return Err(if copied > artifact.size {
-                UpdateError::TooLarge
-            } else {
-                UpdateError::Incomplete
-            });
-        }
+        download_to_path(
+            &url,
+            &destination,
+            artifact.size,
+            &mut bytes_done,
+            bytes_total,
+            files_done,
+            files_total,
+            &mut progress,
+        )?;
         verify_file(&destination, artifact)?;
         set_executable_if_requested(&destination, artifact.executable)?;
         files_done += 1;
@@ -635,14 +882,17 @@ where
             files_done,
             files_total,
         });
-        last_reported_bytes = bytes_done;
     }
     let manifest_path = staging.join(STAGED_MANIFEST);
     fs::write(&manifest_path, manifest_json)?;
+    let verified_files_total = effective_file_count(&release, bootstrap_install);
     Ok(PreparedUpdate {
         manifest: release,
         staging,
         manifest_path,
+        bootstrap_install,
+        transfer_bytes_total: bytes_total,
+        verified_files_total,
     })
 }
 
@@ -687,6 +937,7 @@ mod tests {
     use std::collections::HashMap;
     use std::net::TcpListener;
     use std::thread;
+    use zip::write::SimpleFileOptions;
 
     #[test]
     fn executable_name_selects_test_channel_only_when_explicit() {
@@ -754,6 +1005,7 @@ mod tests {
             mandatory: false,
             minimum_launcher_version: "0.2.1".into(),
             revoked_versions: vec![],
+            bootstrap: None,
             artifacts: vec![artifact("beatoraja.jar"), artifact("runtime/bin/java.exe")],
             signature: String::new(),
         };
@@ -866,12 +1118,152 @@ mod tests {
             mandatory: false,
             minimum_launcher_version: "0.2.0".into(),
             revoked_versions: vec![],
+            bootstrap: None,
             artifacts: vec![],
             signature: String::new(),
         };
         let update = update_info_from_release("0.4.13".into(), true, "0.2.3", &release).unwrap();
         assert_eq!(update.release_notes_markdown_ja, "Legacy notes");
         assert_eq!(update.release_notes_markdown_en, "Legacy notes");
+    }
+
+    #[test]
+    fn installed_update_downloads_only_changed_artifacts() {
+        let signing = SigningKey::from_bytes(&[29_u8; 32]);
+        let artifact = |path: &str, bytes: &[u8]| {
+            json!({
+                "path": path,
+                "sha256": format!("{:x}", Sha256::digest(bytes)),
+                "size": bytes.len(),
+                "executable": false
+            })
+        };
+        let mut manifest = json!({
+            "schema_version": 1,
+            "channel": "test",
+            "platform": "windows-x64",
+            "version": "0.4.14.9",
+            "published_at": "2026-08-04T00:00:00Z",
+            "release_notes_markdown": "delta",
+            "mandatory": false,
+            "minimum_launcher_version": "0.2.7",
+            "revoked_versions": [],
+            "artifacts": [artifact("same.dat", b"same"), artifact("changed.dat", b"new")]
+        });
+        let signature = signing.sign(&serde_jcs::to_vec(&manifest).unwrap());
+        manifest["signature"] = Value::String(STANDARD.encode(signature.to_bytes()));
+        let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let responses = [
+                (
+                    "/channels/test/windows-x64/manifest.json",
+                    manifest_bytes.as_slice(),
+                ),
+                (
+                    "/channels/test/windows-x64/releases/0.4.14.9/changed.dat",
+                    b"new".as_slice(),
+                ),
+            ];
+            for (expected_path, body) in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0_u8; 4096];
+                let length = stream.read(&mut request).unwrap();
+                let line = String::from_utf8_lossy(&request[..length]);
+                let path = line
+                    .lines()
+                    .next()
+                    .and_then(|value| value.split_whitespace().nth(1))
+                    .unwrap();
+                assert_eq!(path, expected_path);
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .unwrap();
+                stream.write_all(body).unwrap();
+            }
+        });
+
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join(VERSION_FILE), "0.4.14.8\n").unwrap();
+        fs::write(root.path().join("same.dat"), b"same").unwrap();
+        fs::write(root.path().join("changed.dat"), b"old").unwrap();
+        let prepared = prepare_from_with_progress(
+            root.path(),
+            true,
+            &format!("http://{address}"),
+            &STANDARD.encode(signing.verifying_key().to_bytes()),
+            "test",
+            "windows-x64",
+            |_| {},
+        )
+        .unwrap();
+        server.join().unwrap();
+
+        assert_eq!(prepared.transfer_bytes_total, 3);
+        assert!(!prepared.staging.join("same.dat").exists());
+        assert_eq!(
+            fs::read(prepared.staging.join("changed.dat")).unwrap(),
+            b"new"
+        );
+    }
+
+    #[test]
+    fn bootstrap_archive_extracts_only_the_signed_inventory() {
+        let root = tempfile::tempdir().unwrap();
+        let archive_path = root.path().join("bootstrap.zip");
+        let file = fs::File::create(&archive_path).unwrap();
+        let mut archive = zip::ZipWriter::new(file);
+        for (path, bytes, executable) in [
+            ("Arena.jar", b"body".as_slice(), false),
+            ("runtime/bin/java.exe", b"java".as_slice(), true),
+            ("ir/bms_ir_arena.jar", b"plugin".as_slice(), false),
+        ] {
+            let mode = if executable { 0o755 } else { 0o644 };
+            archive
+                .start_file(path, SimpleFileOptions::default().unix_permissions(mode))
+                .unwrap();
+            archive.write_all(bytes).unwrap();
+        }
+        archive.finish().unwrap();
+        let artifacts = [
+            ("Arena.jar", b"body".as_slice(), false),
+            ("runtime/bin/java.exe", b"java".as_slice(), true),
+            ("ir/bms_ir_arena.jar", b"plugin".as_slice(), false),
+        ]
+        .into_iter()
+        .map(|(path, bytes, executable)| ReleaseArtifact {
+            path: path.into(),
+            sha256: format!("{:x}", Sha256::digest(bytes)),
+            size: bytes.len() as u64,
+            executable,
+        })
+        .collect::<Vec<_>>();
+        let bootstrap = ReleaseBootstrap {
+            url: "https://example.test/bootstrap.zip".into(),
+            sha256: format!("{:x}", Sha256::digest(fs::read(&archive_path).unwrap())),
+            size: fs::metadata(&archive_path).unwrap().len(),
+            artifacts,
+        };
+        let staging = tempfile::tempdir().unwrap();
+        let mut progress = Vec::new();
+        extract_bootstrap_archive(
+            &archive_path,
+            staging.path(),
+            &bootstrap,
+            bootstrap.size,
+            bootstrap.size,
+            &mut |event| progress.push(event),
+        )
+        .unwrap();
+
+        assert_eq!(fs::read(staging.path().join("Arena.jar")).unwrap(), b"body");
+        assert_eq!(progress.last().unwrap().files_done, 3);
+        assert!(progress.iter().all(|event| event.phase == "extracting"));
     }
 
     #[test]
