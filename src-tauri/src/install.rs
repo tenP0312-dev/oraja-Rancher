@@ -10,6 +10,13 @@ use std::time::Duration;
 use thiserror::Error;
 
 const MINIMUM_JAVA_MAJOR: u32 = 21;
+const UPDATE_STAGING_DIRECTORY: &str = ".bmsir-update-staging";
+const UPDATE_BACKUP_DIRECTORY: &str = ".bmsir-launcher-backup";
+const UPDATE_HELPER: &str = if cfg!(windows) {
+    ".bmsir-launcher-update-helper.exe"
+} else {
+    ".bmsir-launcher-update-helper"
+};
 
 #[derive(Debug, Error)]
 pub enum InstallError {
@@ -340,7 +347,7 @@ pub fn apply_staged_mode(
     let staged_artifacts = verified_update_artifacts(&root, &staging, manifest, bootstrap_install)?;
     let replacement_plugin = plugin_path_from_artifacts(&staged_artifacts)?.map(Path::to_path_buf);
 
-    let backup = root.join(".bmsir-launcher-backup");
+    let backup = root.join(UPDATE_BACKUP_DIRECTORY);
     if backup.exists() {
         fs::remove_dir_all(&backup)?;
     }
@@ -514,7 +521,20 @@ pub fn spawn_self_update(
         bootstrap_install,
     )?;
     let staged_launcher = staging.join(&launcher_path).canonicalize()?;
-    Command::new(staged_launcher)
+    let helper = root.join(UPDATE_HELPER);
+    match helper.symlink_metadata() {
+        Ok(metadata) => {
+            if metadata.is_dir() && !metadata.file_type().is_symlink() {
+                return Err(InstallError::UnsafeFilesystemPath);
+            }
+            fs::remove_file(&helper)?;
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    fs::copy(&staged_launcher, &helper)?;
+    set_executable_if_requested(&helper, true)?;
+    Command::new(helper)
         .arg("--apply-self-update")
         .arg(&root)
         .arg(staging)
@@ -544,6 +564,7 @@ pub fn run_self_update_helper(
                     return Err(InstallError::InvalidRoot);
                 }
                 write_version_marker(root, &manifest.version)?;
+                cleanup_completed_update(root, staging);
                 if launch_after {
                     let java = installation
                         .java_runtime
@@ -565,6 +586,50 @@ pub fn run_self_update_helper(
         }
     }
     Err(last_error.unwrap_or(InstallError::InvalidRoot))
+}
+
+fn remove_launcher_owned_path(path: &Path) -> Result<(), io::Error> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let metadata = path.symlink_metadata()?;
+    if metadata.file_type().is_symlink() || metadata.is_file() {
+        fs::remove_file(path)
+    } else if metadata.is_dir() {
+        fs::remove_dir_all(path)
+    } else {
+        Ok(())
+    }
+}
+
+fn cleanup_completed_update(root: &Path, staging: &Path) {
+    let Ok(root) = root.canonicalize() else {
+        return;
+    };
+    let staging_parent = root.join(UPDATE_STAGING_DIRECTORY);
+    let staging_is_owned = staging
+        .canonicalize()
+        .is_ok_and(|path| path.starts_with(&staging_parent));
+    if !staging_is_owned {
+        return;
+    }
+    let _ = remove_launcher_owned_path(&root.join(UPDATE_BACKUP_DIRECTORY));
+    let _ = remove_launcher_owned_path(&staging_parent);
+}
+
+pub fn cleanup_stale_update_state(root: &Path) {
+    let root = root.to_path_buf();
+    thread::spawn(move || {
+        for _ in 0..40 {
+            let staging = remove_launcher_owned_path(&root.join(UPDATE_STAGING_DIRECTORY));
+            let backup = remove_launcher_owned_path(&root.join(UPDATE_BACKUP_DIRECTORY));
+            let helper = remove_launcher_owned_path(&root.join(UPDATE_HELPER));
+            if staging.is_ok() && backup.is_ok() && helper.is_ok() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(250));
+        }
+    });
 }
 
 pub fn write_version_marker(root: &Path, version: &str) -> Result<(), InstallError> {
@@ -821,6 +886,22 @@ mod tests {
             fs::read_to_string(root.path().join("bmsir-arena-version.txt")).unwrap(),
             "0.4.14\n"
         );
+    }
+
+    #[test]
+    fn completed_update_cleanup_removes_staging_and_backup() {
+        let root = tempfile::tempdir().unwrap();
+        let staging = root.path().join(UPDATE_STAGING_DIRECTORY).join("2");
+        fs::create_dir_all(&staging).unwrap();
+        fs::write(staging.join("artifact"), b"staged").unwrap();
+        let backup = root.path().join(UPDATE_BACKUP_DIRECTORY);
+        fs::create_dir_all(&backup).unwrap();
+        fs::write(backup.join("artifact"), b"backup").unwrap();
+
+        cleanup_completed_update(root.path(), &staging);
+
+        assert!(!root.path().join(UPDATE_STAGING_DIRECTORY).exists());
+        assert!(!backup.exists());
     }
 
     #[test]

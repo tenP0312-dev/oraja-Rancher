@@ -54,7 +54,9 @@ errors are retried with a bounded backoff. Files are staged under the portable
 root, signed executable flags are applied before a staged launcher is started,
 and installation is backed up, replaced, and rolled back on failure. A launcher
 update starts the verified staged executable as a helper, waits for the old
-process, applies the same transaction, and then starts the game when requested.
+process, applies the same transaction, removes staging and backup data, and
+then starts the game when requested. The helper runs from a small verified copy
+outside staging so Windows can remove the downloaded update immediately.
 
 The static patch publication tools and manifest layout are maintained in
 `tenP0312-dev/bms-ir-arena-patch-server`. Build variables are:

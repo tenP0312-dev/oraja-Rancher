@@ -169,6 +169,9 @@ fn launch_detected(root: &Path, configuration: bool) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if let Ok(root) = install::launcher_install_root() {
+        install::cleanup_stale_update_state(&root);
+    }
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             launcher_state,
