@@ -56,10 +56,10 @@ pub fn inspect(root: &Path) -> Result<InstallationInfo, InstallError> {
     if !root.is_dir() {
         return Err(InstallError::InvalidRoot);
     }
-    let game_jar = fs::read_dir(root)?
+    let mut game_jars = fs::read_dir(root)?
         .filter_map(Result::ok)
         .map(|entry| entry.path())
-        .find(|path| {
+        .filter(|path| {
             path.extension().and_then(|value| value.to_str()) == Some("jar")
                 && path
                     .file_name()
@@ -70,7 +70,10 @@ pub fn inspect(root: &Path) -> Result<InstallationInfo, InstallError> {
                             || lower.contains("beatoraja")
                             || lower.contains("bms-ir-arena")
                     })
-        });
+        })
+        .collect::<Vec<_>>();
+    game_jars.sort_by_key(|path| game_jar_priority(path));
+    let game_jar = game_jars.into_iter().next();
     let plugin_jars = plugin_jars(root)?;
     if plugin_jars.len() > 1 {
         return Err(InstallError::DuplicatePlugins);
@@ -102,6 +105,24 @@ pub fn inspect(root: &Path) -> Result<InstallationInfo, InstallError> {
             .map(|path| path.to_string_lossy().into_owned())
             .collect(),
     })
+}
+
+fn game_jar_priority(path: &Path) -> (u8, String) {
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let priority = if name == "beatoraja.jar" {
+        0
+    } else if name.contains("bms-ir-arena") {
+        1
+    } else if name.contains("lr2oraja") {
+        2
+    } else {
+        3
+    };
+    (priority, name)
 }
 
 pub fn inspect_java(path: &Path) -> Result<u32, InstallError> {
@@ -651,6 +672,8 @@ fn game_arguments(root: &Path, game_jar: &Path, configuration: bool) -> Vec<OsSt
     ];
     if configuration {
         arguments.push(OsString::from("-c"));
+    } else {
+        arguments.push(OsString::from("-s"));
     }
     arguments
 }
@@ -861,6 +884,24 @@ mod tests {
     }
 
     #[test]
+    fn installation_prefers_the_canonical_updated_game_jar() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("LR2oraja-EndlessDream.jar"), b"legacy").unwrap();
+        fs::write(
+            root.path()
+                .join("BMS-IR-Arena-oraja-0.4.14-macos-aarch64.jar"),
+            b"versioned",
+        )
+        .unwrap();
+        let canonical = root.path().join("beatoraja.jar");
+        fs::write(&canonical, b"updated").unwrap();
+
+        let installation = inspect(root.path()).unwrap();
+
+        assert_eq!(installation.game_jar.as_deref(), canonical.to_str());
+    }
+
+    #[test]
     fn portable_launch_keeps_bat_memory_and_plugin_arguments() {
         let arguments = game_arguments(Path::new("arena root"), Path::new("beatoraja.jar"), true);
         assert_eq!(
@@ -875,6 +916,13 @@ mod tests {
         assert_eq!(arguments[3], "-jar");
         assert_eq!(arguments[4], "beatoraja.jar");
         assert_eq!(arguments[5], "-c");
+    }
+
+    #[test]
+    fn normal_launch_enters_music_select_directly() {
+        let arguments = game_arguments(Path::new("arena root"), Path::new("beatoraja.jar"), false);
+        assert_eq!(arguments[4], "beatoraja.jar");
+        assert_eq!(arguments[5], "-s");
     }
 
     #[test]
