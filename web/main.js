@@ -53,7 +53,9 @@ const dictionary = {
     deprecatedLoadError: "非推奨版の一覧を取得できませんでした",
     downgradeButton: "ダウングレード",
     downgradeConfirm: "本体を {version}（配信日時: {datetime}）にダウングレードします。Java、プラグイン、設定、スキン、リプレイ、スコアデータは変更されません。よろしいですか？",
-    downgradeSuccess: "ダウングレードが完了しました"
+    downgradeSuccess: "ダウングレードが完了しました",
+    deprecatedKindTest: "(旧テストビルド)",
+    deprecatedKindStable: "(旧安定版)"
   },
   en: {
     checking: "Checking for updates",
@@ -106,7 +108,9 @@ const dictionary = {
     deprecatedLoadError: "Could not load the deprecated version list",
     downgradeButton: "Downgrade",
     downgradeConfirm: "Downgrade the game to {version} (published {datetime}). Java, the plugin, settings, skins, replays, and score data will not be touched. Continue?",
-    downgradeSuccess: "Downgrade complete"
+    downgradeSuccess: "Downgrade complete",
+    deprecatedKindTest: "(older test build)",
+    deprecatedKindStable: "(older stable build)"
   }
 };
 
@@ -187,6 +191,15 @@ function renderProgress() {
   container.hidden = false;
 }
 
+function deprecatedVersionKind() {
+  // Every entry in the deprecated list is, by construction, older than the
+  // channel's currently published version (list_deprecated_versions_from
+  // excludes both the installed and the published version). Labeling each
+  // one by channel makes it unambiguous at a glance that it is an older
+  // build, not a newer one under test.
+  return state?.channel === "test" ? tr("deprecatedKindTest") : tr("deprecatedKindStable");
+}
+
 function renderDeprecated() {
   const toggle = byId("deprecated-toggle");
   const container = byId("deprecated-list-container");
@@ -210,7 +223,8 @@ function renderDeprecated() {
     const item = document.createElement("li");
     const label = document.createElement("span");
     const publishedAt = formatPublishedAt(entry.published_at);
-    label.textContent = publishedAt ? `${entry.version}  ·  ${publishedAt}` : entry.version;
+    const versionLabel = `${entry.version} ${deprecatedVersionKind()}`;
+    label.textContent = publishedAt ? `${versionLabel}  ·  ${publishedAt}` : versionLabel;
     const button = document.createElement("button");
     button.type = "button";
     button.className = "quiet";

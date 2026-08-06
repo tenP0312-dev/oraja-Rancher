@@ -311,8 +311,13 @@ fn fetch_history_from(
 }
 
 /// Lists every version in the signed history index other than
-/// `current_version`, for presentation as a selectable "deprecated" release
-/// the operator can knowingly downgrade to.
+/// `current_version` and the channel's current published version, for
+/// presentation as a selectable "deprecated" release the operator can
+/// knowingly downgrade to. The published version is excluded in addition to
+/// `current_version` because they can differ (a newer release is available
+/// but not yet installed) — without also excluding it, the very release
+/// being offered as "the update" would confusingly also appear as
+/// "deprecated".
 pub fn list_deprecated_versions(current_version: &str) -> Result<Vec<HistoryEntry>, UpdateError> {
     list_deprecated_versions_from(
         update_base_url()?,
@@ -331,9 +336,13 @@ fn list_deprecated_versions_from(
     current_version: &str,
 ) -> Result<Vec<HistoryEntry>, UpdateError> {
     let versions = fetch_history_from(base_url, public_key, selected_channel, selected_platform)?;
+    let (_, published_release) =
+        fetch_release_from(base_url, public_key, selected_channel, selected_platform)?;
     Ok(versions
         .into_iter()
-        .filter(|entry| entry.version != current_version)
+        .filter(|entry| {
+            entry.version != current_version && entry.version != published_release.version
+        })
         .collect())
 }
 
@@ -1810,12 +1819,23 @@ mod tests {
                 ("0.4.12", "2026-06-01T00:00:00Z"),
             ],
         );
+        let manifest_bytes = signed_downgrade_manifest_bytes(
+            &signing,
+            "test",
+            "windows-x64",
+            "0.4.14",
+            "0.2.0",
+            vec![],
+        );
 
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let server = serve_sequential_responses(
             listener,
-            vec![("/channels/test/windows-x64/history.json", history_bytes)],
+            vec![
+                ("/channels/test/windows-x64/history.json", history_bytes),
+                ("/channels/test/windows-x64/manifest.json", manifest_bytes),
+            ],
         );
 
         let versions = list_deprecated_versions_from(
@@ -1834,6 +1854,64 @@ mod tests {
                 .map(|entry| entry.version.as_str())
                 .collect::<Vec<_>>(),
             vec!["0.4.13", "0.4.12"]
+        );
+    }
+
+    #[test]
+    fn list_deprecated_versions_from_also_excludes_the_published_version() {
+        // The installed version can differ from the channel's current
+        // published version (an update is available but not yet installed).
+        // The published release must still never appear as "deprecated" —
+        // that is the exact release being offered as the update.
+        let signing = SigningKey::from_bytes(&[49_u8; 32]);
+        let history_bytes = signed_history_bytes(
+            &signing,
+            "test",
+            "windows-x64",
+            &[
+                ("0.4.14.19", "2026-08-06T00:00:00Z"),
+                ("0.4.13", "2026-07-01T00:00:00Z"),
+            ],
+        );
+        let manifest_bytes = signed_downgrade_manifest_bytes(
+            &signing,
+            "test",
+            "windows-x64",
+            "0.4.14.19",
+            "0.2.0",
+            vec![],
+        );
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = serve_sequential_responses(
+            listener,
+            vec![
+                ("/channels/test/windows-x64/history.json", history_bytes),
+                ("/channels/test/windows-x64/manifest.json", manifest_bytes),
+            ],
+        );
+
+        // The installed version (0.4.14.18) is neither history entry, so
+        // without excluding the published version too, 0.4.14.19 would
+        // incorrectly show up as "deprecated" even though it is the exact
+        // release currently being offered as the update.
+        let versions = list_deprecated_versions_from(
+            &format!("http://{address}"),
+            &STANDARD.encode(signing.verifying_key().to_bytes()),
+            "test",
+            "windows-x64",
+            "0.4.14.18",
+        )
+        .unwrap();
+        server.join().unwrap();
+
+        assert_eq!(
+            versions
+                .iter()
+                .map(|entry| entry.version.as_str())
+                .collect::<Vec<_>>(),
+            vec!["0.4.13"]
         );
     }
 
