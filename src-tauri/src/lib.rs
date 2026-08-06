@@ -201,6 +201,7 @@ pub fn run() {
         install::cleanup_stale_update_state(&root);
     }
     tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             launcher_state,
             check_online_update,

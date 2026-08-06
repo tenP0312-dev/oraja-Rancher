@@ -1,5 +1,6 @@
 const invoke = window.__TAURI__?.core?.invoke;
 const listen = window.__TAURI__?.event?.listen;
+const openUrl = window.__TAURI__?.opener?.openUrl;
 
 const dictionary = {
   ja: {
@@ -512,6 +513,15 @@ byId("check").addEventListener("click", checkUpdate);
 byId("update-launch").addEventListener("click", installAndLaunch);
 byId("launch-current").addEventListener("click", () => launch(false));
 byId("deprecated-toggle").addEventListener("click", toggleDeprecated);
+byId("deprecated-more-link").addEventListener("click", event => {
+  // A plain <a target="_blank"> silently does nothing in the Tauri
+  // webview (external navigation is not the OS browser); open it through
+  // the opener plugin instead.
+  event.preventDefault();
+  if (openUrl) {
+    openUrl(RELEASES_PAGE_URL).catch(error => showError(error));
+  }
+});
 
 if (listen) {
   await listen("arena-update-progress", event => {
