@@ -74,6 +74,7 @@ pub struct UpdateInfo {
     pub platform: String,
     pub installed_version: String,
     pub available_version: String,
+    pub available_published_at: String,
     pub status: String,
     pub mandatory: bool,
     pub release_notes_markdown: String,
@@ -397,6 +398,7 @@ fn update_info_from_release(
         platform: release.platform.clone(),
         installed_version: installed,
         available_version: release.version.clone(),
+        available_published_at: release.published_at.clone(),
         status: status.to_string(),
         mandatory: release.mandatory || revoked || launcher_old,
         release_notes_markdown: release.release_notes_markdown.clone(),
@@ -1018,6 +1020,40 @@ mod tests {
             .artifacts
             .push(artifact("ir/bms_ir_arena_oraja_0.0.69.jar"));
         assert!(bootstrap_artifacts_present(&release));
+    }
+
+    #[test]
+    fn update_info_carries_the_release_published_at_timestamp() {
+        let artifact = |path: &str| crate::manifest::ReleaseArtifact {
+            path: path.into(),
+            sha256: "00".repeat(32),
+            size: 1,
+            executable: false,
+        };
+        let release = ReleaseManifest {
+            schema_version: 1,
+            channel: "test".into(),
+            platform: "windows-x64".into(),
+            version: "0.4.15".into(),
+            published_at: "2026-08-06T12:00:00Z".into(),
+            release_notes_markdown: String::new(),
+            release_notes_markdown_ja: String::new(),
+            release_notes_markdown_en: String::new(),
+            announcements: vec![],
+            mandatory: false,
+            minimum_launcher_version: "0.2.1".into(),
+            revoked_versions: vec![],
+            bootstrap: None,
+            artifacts: vec![
+                artifact("Arena-oraja.jar"),
+                artifact("runtime/bin/java.exe"),
+                artifact("ir/bms_ir_arena_oraja_0.0.69.jar"),
+            ],
+            signature: String::new(),
+        };
+        let update = update_info_from_release("0.4.14".into(), true, "0.2.11", &release).unwrap();
+        assert_eq!(update.available_version, "0.4.15");
+        assert_eq!(update.available_published_at, "2026-08-06T12:00:00Z");
     }
 
     #[test]

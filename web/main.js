@@ -18,6 +18,7 @@ const dictionary = {
     launchCurrent: "現在の版を起動",
     available: "BMS-IR Arena {version} が利用できます",
     installAvailable: "BMS-IR Arena {version} をセットアップできます",
+    publishedAt: "配信日時: {datetime}",
     mandatory: "この更新は必須です",
     revoked: "現在の版は停止されています。更新が必要です",
     launcherOld: "ランチャーの更新が必要です",
@@ -55,6 +56,7 @@ const dictionary = {
     launchCurrent: "Launch installed version",
     available: "BMS-IR Arena {version} is available",
     installAvailable: "BMS-IR Arena {version} is ready to install",
+    publishedAt: "Published: {datetime}",
     mandatory: "This update is required",
     revoked: "The installed version has been revoked and must be updated",
     launcherOld: "The launcher must be updated",
@@ -103,6 +105,16 @@ function applyLanguage() {
 function setStatus(text, kind = "neutral") {
   byId("update-status").textContent = text;
   byId("status-mark").dataset.kind = kind;
+}
+
+function formatPublishedAt(value) {
+  if (!value) return "";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+  return new Intl.DateTimeFormat(language === "ja" ? "ja-JP" : "en-US", {
+    dateStyle: "medium",
+    timeStyle: "short"
+  }).format(parsed);
 }
 
 function formatBytes(bytes) {
@@ -246,6 +258,10 @@ function renderUpdate() {
   const installing = update.status === "install_required";
   const title = installing ? tr("installAvailable") : tr("available");
   byId("available-title").textContent = title.replace("{version}", update.available_version);
+  const publishedAt = formatPublishedAt(update.available_published_at);
+  byId("available-published-at").textContent = publishedAt
+    ? tr("publishedAt").replace("{datetime}", publishedAt)
+    : "";
   byId("update-launch").textContent = installing ? tr("installLaunch") : tr("updateLaunch");
   renderSafeMarkdown(localizedReleaseNotes());
   byId("launch-current").disabled = blocked || !installed;

@@ -131,6 +131,7 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   border-left: 4px solid #1769aa;
   background: #fff;
 }
+.published-at { margin: 2px 0 10px; color: #6b756e; font-size: 13px; }
 .notes { max-height: 190px; margin: 10px 0 15px; overflow: auto; }
 .notes h3 { margin: 10px 0 5px; font-size: 15px; }
 .notes p, .notes ul { margin: 5px 0; }
