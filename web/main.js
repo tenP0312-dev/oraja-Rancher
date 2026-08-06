@@ -44,6 +44,7 @@ const dictionary = {
     deprecatedLoading: "読み込んでいます…",
     deprecatedEmpty: "非推奨版はありません",
     deprecatedLoadError: "非推奨版の一覧を取得できませんでした",
+    deprecatedMoreLink: "もっと古い版はこちら(GitHub)",
     downgradeButton: "ダウングレード",
     downgradeConfirm: "本体を {version}（配信日時: {datetime}）にダウングレードします。Java、プラグイン、設定、スキン、スコアデータは変更されません。よろしいですか？",
     downgradeSuccess: "ダウングレードが完了しました",
@@ -92,6 +93,7 @@ const dictionary = {
     deprecatedLoading: "Loading…",
     deprecatedEmpty: "No deprecated versions are available",
     deprecatedLoadError: "Could not load the deprecated version list",
+    deprecatedMoreLink: "Older releases (GitHub)",
     downgradeButton: "Downgrade",
     downgradeConfirm: "Downgrade the game to {version} (published {datetime}). Java, the plugin, settings, skins, and score data will not be touched. Continue?",
     downgradeSuccess: "Downgrade complete",
@@ -99,6 +101,11 @@ const dictionary = {
     deprecatedKindStable: "(older stable build)"
   }
 };
+
+// Only the launcher's own recent history is offered as a one-click
+// downgrade; anything older is still on GitHub and linked from the panel
+// instead of being kept in the signed publication tree indefinitely.
+const RELEASES_PAGE_URL = "https://github.com/tenP0312-dev/bms-ir-arena-patch-server/releases";
 
 let language = localStorage.getItem("bmsir-launcher-language") === "en" ? "en" : "ja";
 let state = null;
@@ -194,6 +201,7 @@ function renderDeprecated() {
   toggle.setAttribute("aria-expanded", String(deprecatedVisible));
   toggle.disabled = checking || installingUpdate;
   container.hidden = !deprecatedVisible;
+  byId("deprecated-more-link").href = RELEASES_PAGE_URL;
   if (!deprecatedVisible) return;
   loading.hidden = !deprecatedLoading;
   list.replaceChildren();
