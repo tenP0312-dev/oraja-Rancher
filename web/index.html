@@ -59,6 +59,15 @@
     </div>
   </section>
 
+  <section class="deprecated-panel">
+    <button id="deprecated-toggle" class="quiet" type="button" data-i18n="deprecatedToggle" aria-expanded="false" aria-controls="deprecated-list-container">非推奨版から選択</button>
+    <div id="deprecated-list-container" hidden>
+      <p id="deprecated-loading" class="empty-information" hidden data-i18n="deprecatedLoading">読み込んでいます…</p>
+      <p id="deprecated-empty" class="empty-information" hidden data-i18n="deprecatedEmpty">非推奨版はありません</p>
+      <ul id="deprecated-list" aria-live="polite"></ul>
+    </div>
+  </section>
+
   <details id="details" hidden>
     <summary data-i18n="details">詳細</summary>
     <pre id="error-detail"></pre>

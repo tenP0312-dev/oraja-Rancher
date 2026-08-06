@@ -135,6 +135,30 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .notes { max-height: 190px; margin: 10px 0 15px; overflow: auto; }
 .notes h3 { margin: 10px 0 5px; font-size: 15px; }
 .notes p, .notes ul { margin: 5px 0; }
+.deprecated-panel { border-top: 1px solid #cbd2cc; padding-top: 12px; }
+#deprecated-list-container { margin-top: 10px; }
+#deprecated-list {
+  display: grid;
+  gap: 6px;
+  max-height: 220px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+#deprecated-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid #d9ded9;
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 13px;
+}
+#deprecated-list li button { min-height: 32px; padding: 5px 12px; font-size: 13px; }
+#deprecated-loading, #deprecated-empty { color: #6b756e; }
 details { border-top: 1px solid #cbd2cc; padding-top: 12px; }
 summary { cursor: pointer; font-weight: 700; }
 pre { overflow: auto; white-space: pre-wrap; color: #8b2929; }
