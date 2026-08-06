@@ -21,11 +21,36 @@ header {
 h1 { margin: 0; font-size: 28px; letter-spacing: 0; }
 h2 { margin: 0 0 10px; font-size: 17px; letter-spacing: 0; }
 p { margin: 5px 0 0; color: #536058; }
-#version, #launcher-version {
+.status-cards { display: grid; gap: 8px; }
+.status-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 14px;
+  border: 1px solid #d9ded9;
+  border-radius: 8px;
+  background: #f6f8f5;
+}
+.status-card-label { margin: 0; font-size: 13px; font-weight: 700; color: #354139; }
+.status-card-version {
+  margin: 2px 0 0;
   font-family: ui-monospace, SFMono-Regular, monospace;
   font-size: 13px;
 }
-#launcher-version { margin-top: 2px; }
+.status-badge {
+  flex: 0 0 auto;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.status-badge[data-kind="ok"] { background: #e2f4e7; color: #1c6b3f; }
+.status-badge[data-kind="available"] { background: #e4f1fa; color: #135a8a; }
+.status-badge[data-kind="warning"] { background: #fbeedd; color: #8a5300; }
+.status-badge[data-kind="error"] { background: #fbe6e6; color: #8f2b2b; }
+.status-badge[data-kind="neutral"] { background: #eceeec; color: #55605a; }
 .status-band {
   display: grid;
   grid-template-columns: 14px 1fr;

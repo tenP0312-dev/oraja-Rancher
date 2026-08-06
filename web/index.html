@@ -9,16 +9,29 @@
 <body>
 <main>
   <header>
-    <div>
-      <h1>BMS-IR Arena</h1>
-      <p id="version">...</p>
-      <p id="launcher-version">Launcher ...</p>
-    </div>
+    <h1>BMS-IR Arena</h1>
     <button id="language" class="quiet language-button" type="button" aria-label="英語に切り替え" title="英語に切り替え">
       <span class="language-icon" aria-hidden="true">&#127760;</span>
       <span id="language-label">日本語</span>
     </button>
   </header>
+
+  <section class="status-cards" aria-live="polite">
+    <div class="status-card">
+      <div>
+        <p class="status-card-label" data-i18n="statusBody">本体</p>
+        <p id="body-version-line" class="status-card-version">…</p>
+      </div>
+      <span id="body-badge" class="status-badge" data-kind="neutral"></span>
+    </div>
+    <div class="status-card">
+      <div>
+        <p class="status-card-label" data-i18n="statusLauncher">ランチャー</p>
+        <p id="launcher-version-line" class="status-card-version">…</p>
+      </div>
+      <span id="launcher-badge" class="status-badge" data-kind="neutral"></span>
+    </div>
+  </section>
 
   <section class="status-band" aria-live="polite">
     <span id="status-mark" aria-hidden="true"></span>

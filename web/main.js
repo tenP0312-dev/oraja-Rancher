@@ -31,9 +31,7 @@ const dictionary = {
     policyInvalid: "保存された更新判定を検証できません。オンライン更新確認が必要です",
     updateUnconfigured: "このランチャーには更新先が設定されていません",
     switchLanguage: "英語に切り替え",
-    bodyVersion: "本体 {version} / {channel}",
     notInstalledVersion: "未インストール",
-    launcherVersion: "Launcher {version}",
     downloading: "本体をダウンロード中",
     extracting: "本体を展開・検証中",
     verifying: "ダウンロードしたファイルを検証中",
@@ -50,7 +48,16 @@ const dictionary = {
     downgradeConfirm: "本体を {version}（配信日時: {datetime}）にダウングレードします。Java、プラグイン、設定、スキン、スコアデータは変更されません。よろしいですか？",
     downgradeSuccess: "ダウングレードが完了しました",
     deprecatedKindTest: "(旧テストビルド)",
-    deprecatedKindStable: "(旧安定版)"
+    deprecatedKindStable: "(旧安定版)",
+    statusBody: "本体",
+    statusLauncher: "ランチャー",
+    statusChecking: "確認中",
+    statusUpToDate: "最新",
+    statusSetupNeeded: "セットアップ必要",
+    statusUpdateAvailable: "更新あり",
+    statusMandatory: "必須更新",
+    statusRevoked: "利用停止中",
+    statusLauncherTooOld: "ランチャー要更新"
   },
   en: {
     checking: "Checking for updates",
@@ -80,9 +87,7 @@ const dictionary = {
     policyInvalid: "The saved update policy is invalid. An online update check is required",
     updateUnconfigured: "This launcher has no update endpoint configured",
     switchLanguage: "Switch to Japanese",
-    bodyVersion: "Body {version} / {channel}",
     notInstalledVersion: "Not installed",
-    launcherVersion: "Launcher {version}",
     downloading: "Downloading game files",
     extracting: "Extracting and verifying game files",
     verifying: "Verifying downloaded files",
@@ -99,7 +104,16 @@ const dictionary = {
     downgradeConfirm: "Downgrade the game to {version} (published {datetime}). Java, the plugin, settings, skins, and score data will not be touched. Continue?",
     downgradeSuccess: "Downgrade complete",
     deprecatedKindTest: "(older test build)",
-    deprecatedKindStable: "(older stable build)"
+    deprecatedKindStable: "(older stable build)",
+    statusBody: "Body",
+    statusLauncher: "Launcher",
+    statusChecking: "Checking",
+    statusUpToDate: "Up to date",
+    statusSetupNeeded: "Setup needed",
+    statusUpdateAvailable: "Update available",
+    statusMandatory: "Required update",
+    statusRevoked: "Revoked",
+    statusLauncherTooOld: "Launcher needs updating"
   }
 };
 
@@ -358,6 +372,49 @@ function renderAnnouncements() {
   });
 }
 
+function setBadge(element, kind, text) {
+  element.textContent = text;
+  element.dataset.kind = kind;
+}
+
+function renderStatusCards() {
+  if (!state) return;
+  const installed = Boolean(state.installation_ready);
+  const installedVersion = installed ? state.installed_version : tr("notInstalledVersion");
+  const bodyLine = byId("body-version-line");
+  const bodyBadge = byId("body-badge");
+
+  if (checking) {
+    bodyLine.textContent = installedVersion;
+    setBadge(bodyBadge, "neutral", tr("statusChecking"));
+  } else if (!update || update.status === "current") {
+    bodyLine.textContent = installedVersion;
+    setBadge(bodyBadge, installed ? "ok" : "warning", installed ? tr("statusUpToDate") : tr("statusSetupNeeded"));
+  } else {
+    bodyLine.textContent = installed
+      ? `${installedVersion} → ${update.available_version}`
+      : `→ ${update.available_version}`;
+    if (update.status === "revoked") {
+      setBadge(bodyBadge, "error", tr("statusRevoked"));
+    } else if (update.status === "launcher_too_old") {
+      setBadge(bodyBadge, "error", tr("statusLauncherTooOld"));
+    } else if (update.status === "install_required") {
+      setBadge(bodyBadge, "warning", tr("statusSetupNeeded"));
+    } else if (update.mandatory) {
+      setBadge(bodyBadge, "warning", tr("statusMandatory"));
+    } else {
+      setBadge(bodyBadge, "available", tr("statusUpdateAvailable"));
+    }
+  }
+
+  byId("launcher-version-line").textContent = state.launcher_version;
+  // The launcher does not yet publish a "newer launcher available" signal
+  // separate from the body (see the deprecated-version-downgrade PR notes:
+  // launcher self-update is wired but no manifest has shipped a launcher
+  // artifact yet), so this always reads as up to date for now.
+  setBadge(byId("launcher-badge"), "ok", tr("statusUpToDate"));
+}
+
 function renderUpdate() {
   if (!state) return;
   const installed = Boolean(state.installation_ready);
@@ -366,12 +423,7 @@ function renderUpdate() {
   byId("play").disabled = !canLaunch();
   byId("configure").disabled = !canLaunch();
   byId("check").disabled = checking;
-  const version = installed ? state.installed_version : tr("notInstalledVersion");
-  byId("version").textContent = tr("bodyVersion")
-    .replace("{version}", version)
-    .replace("{channel}", state.channel);
-  byId("launcher-version").textContent = tr("launcherVersion")
-    .replace("{version}", state.launcher_version);
+  renderStatusCards();
   byId("update-panel").hidden = !update || update.status === "current";
   renderAnnouncements();
   renderDeprecated();
