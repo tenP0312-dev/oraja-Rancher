@@ -1,0 +1,200 @@
+name: Arena launcher CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  launcher:
+    name: Portable validation (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Test launcher
+        if: github.event_name == 'pull_request'
+        working-directory: src-tauri
+        run: cargo test --locked
+
+      - name: Build portable launcher binary
+        if: github.event_name == 'pull_request'
+        working-directory: src-tauri
+        run: cargo build --release --locked
+
+      - name: Install pinned Tauri CLI for macOS
+        if: runner.os == 'macOS'
+        run: |
+          archive="$RUNNER_TEMP/cargo-tauri.zip"
+          curl --fail --location --silent --show-error \
+            https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v2.11.4/cargo-tauri-aarch64-apple-darwin.zip \
+            --output "$archive"
+          echo "82bdcb9ae7f407882321680ae50750f11623fae22445f8b00b096e10f815d604  $archive" | shasum -a 256 --check
+          unzip -jo "$archive" cargo-tauri -d "$HOME/.cargo/bin"
+          chmod 755 "$HOME/.cargo/bin/cargo-tauri"
+          cargo tauri --version
+
+      - name: Install pinned Tauri CLI for Windows internal build
+        if: runner.os == 'Windows' && github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP "cargo-tauri.zip"
+          Invoke-WebRequest `
+            -Uri "https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v2.11.4/cargo-tauri-x86_64-pc-windows-msvc.zip" `
+            -OutFile $archive
+          $actual = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+          if ($actual -ne "0743e30a661a35d63339b24cf63828f97ba5389a1d7f13b368a542794dd0a3f3") {
+            throw "Tauri CLI archive SHA-256 mismatch: $actual"
+          }
+          Expand-Archive -Path $archive -DestinationPath $env:RUNNER_TEMP -Force
+          Copy-Item (Join-Path $env:RUNNER_TEMP "cargo-tauri.exe") (Join-Path $env:USERPROFILE ".cargo/bin/cargo-tauri.exe") -Force
+          cargo tauri --version
+
+      - name: Bundle unsigned macOS validation app
+        if: runner.os == 'macOS' && github.event_name == 'pull_request'
+        working-directory: src-tauri
+        run: cargo tauri build --bundles app --no-sign --ci
+
+      - name: Verify macOS validation app
+        if: runner.os == 'macOS' && github.event_name == 'pull_request'
+        run: |
+          app="src-tauri/target/release/bundle/macos/BMS-IR Arena.app"
+          binary="$app/Contents/MacOS/bmsir-arena-launcher"
+          test -d "$app"
+          test -x "$binary"
+          test "$(plutil -extract CFBundleName raw -o - "$app/Contents/Info.plist")" = "BMS-IR Arena"
+          file "$binary" | grep -q 'Mach-O 64-bit executable arm64'
+          ditto -c -k --sequesterRsrc --keepParent "$app" bmsir-arena-launcher-validation-only.app.zip
+
+      - name: Verify Windows GUI subsystem
+        if: runner.os == 'Windows' && github.event_name == 'pull_request'
+        shell: pwsh
+        run: |
+          $path = "src-tauri/target/release/bmsir-arena-launcher.exe"
+          $bytes = [System.IO.File]::ReadAllBytes($path)
+          if ($bytes.Length -lt 256 -or $bytes[0] -ne 0x4d -or $bytes[1] -ne 0x5a) {
+            throw "Launcher is not a valid PE executable"
+          }
+          $peOffset = [BitConverter]::ToInt32($bytes, 0x3c)
+          $subsystem = [BitConverter]::ToUInt16($bytes, $peOffset + 24 + 68)
+          if ($subsystem -ne 2) {
+            throw "Launcher must use IMAGE_SUBSYSTEM_WINDOWS_GUI; got $subsystem"
+          }
+
+      - name: Name Windows validation executable
+        if: runner.os == 'Windows' && github.event_name == 'pull_request'
+        shell: pwsh
+        run: |
+          Copy-Item src-tauri/target/release/bmsir-arena-launcher.exe "bmsir-arena-launcher-validation-only.exe"
+
+      - name: Upload short-lived Windows portable output
+        if: runner.os == 'Windows' && github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-ci-only-arena-launcher-windows-x64
+          path: bmsir-arena-launcher-validation-only.exe
+          retention-days: 3
+          if-no-files-found: error
+
+      - name: Upload short-lived macOS app output
+        if: runner.os == 'macOS' && github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-ci-only-arena-launcher-macos-arm64
+          path: bmsir-arena-launcher-validation-only.app.zip
+          retention-days: 3
+          if-no-files-found: error
+
+      - name: Build configured internal test launcher
+        if: runner.os == 'Windows' && github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        working-directory: src-tauri
+        env:
+          BMSIR_ARENA_UPDATE_BASE_URL: ${{ vars.ARENA_TEST_UPDATE_BASE_URL }}
+          BMSIR_ARENA_RELEASE_PUBLIC_KEY: ${{ vars.ARENA_TEST_RELEASE_PUBLIC_KEY }}
+          BMSIR_ARENA_CLIENT_VERSION: "0.4.14.18"
+        run: |
+          if (-not $env:BMSIR_ARENA_UPDATE_BASE_URL -or -not $env:BMSIR_ARENA_RELEASE_PUBLIC_KEY) {
+            throw "Internal test update URL or public key is not configured"
+          }
+          cargo tauri build --no-bundle --ci --config tauri.test.conf.json
+          $source = "target/release/bmsir-arena-launcher.exe"
+          $bytes = [System.IO.File]::ReadAllBytes($source)
+          $text = [System.Text.Encoding]::ASCII.GetString($bytes)
+          if (-not $text.Contains("BMSIR_ARENA_UPDATE_CONFIGURED_V1")) {
+            throw "Internal test launcher is missing its update configuration marker"
+          }
+          if (-not $text.Contains("org.bms-ir.arena.launcher.test")) {
+            throw "Internal test launcher is missing its isolated application identifier"
+          }
+          Copy-Item $source "../BMS-IR Arena Test.exe"
+
+      - name: Build configured internal macOS test launcher
+        if: runner.os == 'macOS' && github.event_name == 'workflow_dispatch'
+        working-directory: src-tauri
+        env:
+          BMSIR_ARENA_UPDATE_BASE_URL: ${{ vars.ARENA_TEST_UPDATE_BASE_URL }}
+          BMSIR_ARENA_RELEASE_PUBLIC_KEY: ${{ vars.ARENA_TEST_RELEASE_PUBLIC_KEY }}
+          BMSIR_ARENA_CLIENT_VERSION: "0.4.14.18"
+        run: |
+          if test -z "$BMSIR_ARENA_UPDATE_BASE_URL" || test -z "$BMSIR_ARENA_RELEASE_PUBLIC_KEY"; then
+            echo "Internal test update URL or public key is not configured" >&2
+            exit 1
+          fi
+          cargo tauri build --bundles app --no-sign --ci --config tauri.test.conf.json
+          app="target/release/bundle/macos/BMS-IR Arena Test.app"
+          binary="$app/Contents/MacOS/bmsir-arena-launcher"
+          python3 - "$binary" <<'PY'
+          from pathlib import Path
+          import sys
+
+          data = Path(sys.argv[1]).read_bytes()
+          if b"BMSIR_ARENA_UPDATE_CONFIGURED_V1" not in data:
+              raise SystemExit("Configured macOS launcher is missing its update marker")
+          PY
+          bundle_name="$(plutil -extract CFBundleName raw -o - "$app/Contents/Info.plist")"
+          if test "$bundle_name" != "BMS-IR Arena Test"; then
+            echo "Unexpected macOS bundle name: $bundle_name" >&2
+            exit 1
+          fi
+          codesign --force --deep --sign - "$app"
+          codesign --verify --deep --strict "$app"
+          ditto -c -k --sequesterRsrc --keepParent "$app" "../BMS-IR Arena Test.app.zip"
+
+      - name: Upload configured internal test launcher
+        if: runner.os == 'Windows' && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: arena-launcher-windows-x64-internal-test
+          path: BMS-IR Arena Test.exe
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Upload configured internal macOS test launcher
+        if: runner.os == 'macOS' && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: arena-launcher-macos-arm64-internal-test
+          path: BMS-IR Arena Test.app.zip
+          retention-days: 1
+          if-no-files-found: error
+
+# These outputs are deliberately not releases. Official Windows and macOS
+# artifact requires a compiled update endpoint and release verification key.
+# A manual run may produce one-day internal-test Windows EXE and ad-hoc-signed
+# macOS app artifacts from the repository variables. Stable publication still
+# requires Authenticode and Developer ID/notarization. No installer or MSI is
+# produced.
