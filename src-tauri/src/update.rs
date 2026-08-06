@@ -1,7 +1,7 @@
 use crate::install::{set_executable_if_requested, CANONICAL_GAME_JAR};
 use crate::manifest::{
-    verify_file, verify_manifest, ReleaseAnnouncement, ReleaseArtifact, ReleaseBootstrap,
-    ReleaseManifest,
+    verify_file, verify_history, verify_manifest, HistoryEntry, ReleaseAnnouncement,
+    ReleaseArtifact, ReleaseBootstrap, ReleaseManifest,
 };
 use serde::Serialize;
 use std::cmp::Ordering;
@@ -62,8 +62,16 @@ pub enum UpdateError {
     Archive(#[from] zip::result::ZipError),
     #[error("BMS-IR Arena {0} is a required update")]
     RequiredUpdate(String),
+    #[error("this launcher is too old to downgrade to that release")]
+    DowngradeLauncherTooOld,
+    #[error("the current installation must be complete before downgrading")]
+    DowngradeInstallationNotReady,
+    #[error("the selected release does not contain the game JAR")]
+    DowngradeArtifactMissing,
     #[error(transparent)]
     Manifest(#[from] crate::manifest::ManifestError),
+    #[error(transparent)]
+    Install(#[from] crate::install::InstallError),
     #[error("I/O error: {0}")]
     Io(#[from] io::Error),
 }
@@ -275,6 +283,209 @@ fn fetch_release_from(
         return Err(UpdateError::WrongTarget);
     }
     Ok((input, release))
+}
+
+fn fetch_history_from(
+    base_url: &str,
+    public_key: &str,
+    selected_channel: &str,
+    selected_platform: &str,
+) -> Result<Vec<HistoryEntry>, UpdateError> {
+    if selected_platform == "unsupported" {
+        return Err(UpdateError::WrongTarget);
+    }
+    let url = append_url(
+        base_url,
+        &[
+            "channels",
+            selected_channel,
+            selected_platform,
+            "history.json",
+        ],
+    )?;
+    let bytes = fetch_bytes(&url, MAX_MANIFEST_BYTES)?;
+    let input = String::from_utf8(bytes).map_err(|_| UpdateError::Incomplete)?;
+    let history = verify_history(&input, public_key, selected_channel, selected_platform)?;
+    Ok(history.versions)
+}
+
+/// Lists every version in the signed history index other than
+/// `current_version`, for presentation as a selectable "deprecated" release
+/// the operator can knowingly downgrade to.
+pub fn list_deprecated_versions(current_version: &str) -> Result<Vec<HistoryEntry>, UpdateError> {
+    list_deprecated_versions_from(
+        update_base_url()?,
+        release_public_key()?,
+        &channel(),
+        platform(),
+        current_version,
+    )
+}
+
+fn list_deprecated_versions_from(
+    base_url: &str,
+    public_key: &str,
+    selected_channel: &str,
+    selected_platform: &str,
+    current_version: &str,
+) -> Result<Vec<HistoryEntry>, UpdateError> {
+    let versions = fetch_history_from(base_url, public_key, selected_channel, selected_platform)?;
+    Ok(versions
+        .into_iter()
+        .filter(|entry| entry.version != current_version)
+        .collect())
+}
+
+fn fetch_versioned_manifest_from(
+    base_url: &str,
+    public_key: &str,
+    selected_channel: &str,
+    selected_platform: &str,
+    version: &str,
+) -> Result<ReleaseManifest, UpdateError> {
+    let url = append_url(
+        base_url,
+        &[
+            "channels",
+            selected_channel,
+            selected_platform,
+            "manifests",
+            &format!("{version}.json"),
+        ],
+    )?;
+    let bytes = fetch_bytes(&url, MAX_MANIFEST_BYTES)?;
+    let input = String::from_utf8(bytes).map_err(|_| UpdateError::Incomplete)?;
+    let manifest = verify_manifest(&input, public_key)?;
+    if manifest.channel != selected_channel
+        || manifest.platform != selected_platform
+        || manifest.version != version
+    {
+        return Err(UpdateError::WrongTarget);
+    }
+    Ok(manifest)
+}
+
+/// Replaces only the canonical game JAR with the one from an older, still
+/// signed release. Java, the BMS-IR plugin, launcher settings, skins, and
+/// every player database are left untouched, matching item #17 of the
+/// checklist: a downgrade or unpatch must not touch anything else.
+///
+/// The target version must (1) still be listed in the signed history index,
+/// (2) have its own independently signed manifest matching that exact
+/// version, channel and platform, (3) declare a `minimum_launcher_version`
+/// this launcher build still satisfies, and (4) only proceed once the
+/// current installation is already complete (Java + plugin + JAR), so a
+/// downgrade never has to guess about anything beyond the JAR itself.
+pub fn downgrade_to_version<F>(
+    root: &Path,
+    target_version: &str,
+    launcher_version: &str,
+    progress: F,
+) -> Result<ReleaseManifest, UpdateError>
+where
+    F: FnMut(UpdateProgress),
+{
+    downgrade_to_version_from(
+        update_base_url()?,
+        release_public_key()?,
+        &channel(),
+        platform(),
+        root,
+        target_version,
+        launcher_version,
+        progress,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn downgrade_to_version_from<F>(
+    base_url: &str,
+    public_key: &str,
+    selected_channel: &str,
+    selected_platform: &str,
+    root: &Path,
+    target_version: &str,
+    launcher_version: &str,
+    mut progress: F,
+) -> Result<ReleaseManifest, UpdateError>
+where
+    F: FnMut(UpdateProgress),
+{
+    let history = fetch_history_from(base_url, public_key, selected_channel, selected_platform)?;
+    if !history.iter().any(|entry| entry.version == target_version) {
+        return Err(UpdateError::Manifest(
+            crate::manifest::ManifestError::HistoryVersionMissing,
+        ));
+    }
+
+    let manifest = fetch_versioned_manifest_from(
+        base_url,
+        public_key,
+        selected_channel,
+        selected_platform,
+        target_version,
+    )?;
+
+    if compare_versions(launcher_version, &manifest.minimum_launcher_version) == Ordering::Less {
+        return Err(UpdateError::DowngradeLauncherTooOld);
+    }
+    let installation = crate::install::inspect(root)?;
+    if !crate::install::is_ready(&installation) {
+        return Err(UpdateError::DowngradeInstallationNotReady);
+    }
+
+    let jar_artifact = manifest
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.path.eq_ignore_ascii_case(CANONICAL_GAME_JAR))
+        .ok_or(UpdateError::DowngradeArtifactMissing)?
+        .clone();
+
+    let staging_directory = root.join(STAGING_DIRECTORY);
+    fs::create_dir_all(&staging_directory)?;
+    let staging_path = staging_directory.join("downgrade.jar");
+    let artifact_url = append_url(
+        base_url,
+        &[
+            "channels",
+            selected_channel,
+            selected_platform,
+            "releases",
+            target_version,
+            &jar_artifact.path,
+        ],
+    )?;
+    let mut bytes_done = 0_u64;
+    download_to_path(
+        &artifact_url,
+        &staging_path,
+        jar_artifact.size,
+        &mut bytes_done,
+        jar_artifact.size,
+        0,
+        1,
+        &mut progress,
+    )?;
+    verify_file(&staging_path, &jar_artifact)?;
+    set_executable_if_requested(&staging_path, jar_artifact.executable)?;
+
+    let destination = root.join(CANONICAL_GAME_JAR);
+    let backup = staging_directory.join("downgrade.jar.previous");
+    let had_previous = destination.exists();
+    if had_previous {
+        fs::rename(&destination, &backup)?;
+    }
+    if let Err(error) = fs::rename(&staging_path, &destination) {
+        if had_previous {
+            let _ = fs::rename(&backup, &destination);
+        }
+        return Err(UpdateError::Io(error));
+    }
+    if had_previous {
+        let _ = fs::remove_file(&backup);
+    }
+    progress(UpdateProgress::completed("applying", jar_artifact.size, 1));
+    Ok(manifest)
 }
 
 fn bootstrap_artifacts_present(release: &ReleaseManifest) -> bool {
@@ -1478,5 +1689,508 @@ mod tests {
             url.as_str(),
             "https://example.test/arena-patches/channels/test/windows-x64/BMS-IR%20Arena.exe"
         );
+    }
+
+    fn signed_history_bytes(
+        signing: &SigningKey,
+        channel: &str,
+        platform: &str,
+        versions: &[(&str, &str)],
+    ) -> Vec<u8> {
+        let mut history = json!({
+            "schema_version": 1,
+            "channel": channel,
+            "platform": platform,
+            "versions": versions
+                .iter()
+                .map(|(version, published_at)| json!({
+                    "version": version,
+                    "published_at": published_at,
+                }))
+                .collect::<Vec<_>>(),
+        });
+        let signature = signing.sign(&serde_jcs::to_vec(&history).unwrap());
+        history["signature"] = Value::String(STANDARD.encode(signature.to_bytes()));
+        serde_json::to_vec(&history).unwrap()
+    }
+
+    fn signed_downgrade_manifest_bytes(
+        signing: &SigningKey,
+        channel: &str,
+        platform: &str,
+        version: &str,
+        minimum_launcher_version: &str,
+        artifacts: Vec<Value>,
+    ) -> Vec<u8> {
+        let mut manifest = json!({
+            "schema_version": 1,
+            "channel": channel,
+            "platform": platform,
+            "version": version,
+            "published_at": "2026-08-01T00:00:00Z",
+            "release_notes_markdown": "",
+            "mandatory": false,
+            "minimum_launcher_version": minimum_launcher_version,
+            "revoked_versions": [],
+            "artifacts": artifacts,
+        });
+        let signature = signing.sign(&serde_jcs::to_vec(&manifest).unwrap());
+        manifest["signature"] = Value::String(STANDARD.encode(signature.to_bytes()));
+        serde_json::to_vec(&manifest).unwrap()
+    }
+
+    /// Spawns a thread that replies to `responses.len()` sequential requests
+    /// on one connection each, asserting the exact path requested for every
+    /// reply in order.
+    fn serve_sequential_responses(
+        listener: TcpListener,
+        responses: Vec<(&'static str, Vec<u8>)>,
+    ) -> thread::JoinHandle<()> {
+        thread::spawn(move || {
+            for (expected_path, body) in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0_u8; 4096];
+                let length = stream.read(&mut request).unwrap();
+                let line = String::from_utf8_lossy(&request[..length]);
+                let path = line
+                    .lines()
+                    .next()
+                    .and_then(|value| value.split_whitespace().nth(1))
+                    .unwrap();
+                assert_eq!(path, expected_path);
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .unwrap();
+                stream.write_all(&body).unwrap();
+            }
+        })
+    }
+
+    #[cfg(unix)]
+    fn write_fake_java(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            path,
+            "#!/bin/sh\necho 'openjdk version \"21.0.1\" 2026-01-01' 1>&2\n",
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions).unwrap();
+    }
+
+    /// Builds a root that `install::is_ready` reports as complete: a game
+    /// JAR, exactly one plugin JAR, and a bundled Java that reports a
+    /// supported major version, so downgrade tests can reach the
+    /// installation-readiness gate deterministically instead of depending on
+    /// whatever Java (if any) happens to be on the host running the tests.
+    #[cfg(unix)]
+    fn make_ready_installation(root: &Path, game_jar_bytes: &[u8]) {
+        fs::write(root.join(CANONICAL_GAME_JAR), game_jar_bytes).unwrap();
+        write_fake_java(&root.join("runtime/bin/java"));
+        fs::create_dir_all(root.join("ir")).unwrap();
+        fs::write(root.join("ir/bms_ir_arena_oraja_0.0.69.jar"), b"plugin").unwrap();
+    }
+
+    #[test]
+    fn list_deprecated_versions_from_excludes_the_current_version() {
+        let signing = SigningKey::from_bytes(&[41_u8; 32]);
+        let history_bytes = signed_history_bytes(
+            &signing,
+            "test",
+            "windows-x64",
+            &[
+                ("0.4.14", "2026-08-01T00:00:00Z"),
+                ("0.4.13", "2026-07-01T00:00:00Z"),
+                ("0.4.12", "2026-06-01T00:00:00Z"),
+            ],
+        );
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = serve_sequential_responses(
+            listener,
+            vec![("/channels/test/windows-x64/history.json", history_bytes)],
+        );
+
+        let versions = list_deprecated_versions_from(
+            &format!("http://{address}"),
+            &STANDARD.encode(signing.verifying_key().to_bytes()),
+            "test",
+            "windows-x64",
+            "0.4.14",
+        )
+        .unwrap();
+        server.join().unwrap();
+
+        assert_eq!(
+            versions
+                .iter()
+                .map(|entry| entry.version.as_str())
+                .collect::<Vec<_>>(),
+            vec!["0.4.13", "0.4.12"]
+        );
+    }
+
+    #[test]
+    fn list_deprecated_versions_from_rejects_tampered_history() {
+        let signing = SigningKey::from_bytes(&[42_u8; 32]);
+        let mut history: Value = serde_json::from_slice(&signed_history_bytes(
+            &signing,
+            "test",
+            "windows-x64",
+            &[("0.4.14", "2026-08-01T00:00:00Z")],
+        ))
+        .unwrap();
+        // Tamper with the payload after signing so the signature no longer
+        // matches the content the launcher would verify.
+        history["versions"][0]["version"] = Value::String("0.4.99".into());
+        let tampered_bytes = serde_json::to_vec(&history).unwrap();
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = serve_sequential_responses(
+            listener,
+            vec![("/channels/test/windows-x64/history.json", tampered_bytes)],
+        );
+
+        let result = list_deprecated_versions_from(
+            &format!("http://{address}"),
+            &STANDARD.encode(signing.verifying_key().to_bytes()),
+            "test",
+            "windows-x64",
+            "0.4.14",
+        );
+        server.join().unwrap();
+
+        assert!(matches!(
+            result,
+            Err(UpdateError::Manifest(
+                crate::manifest::ManifestError::Signature
+            ))
+        ));
+    }
+
+    #[test]
+    fn list_deprecated_versions_from_rejects_wrong_target_history() {
+        let signing = SigningKey::from_bytes(&[43_u8; 32]);
+        // Signed for the "stable" channel while the launcher requests "test".
+        let history_bytes = signed_history_bytes(
+            &signing,
+            "stable",
+            "windows-x64",
+            &[("0.4.14", "2026-08-01T00:00:00Z")],
+        );
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = serve_sequential_responses(
+            listener,
+            vec![("/channels/test/windows-x64/history.json", history_bytes)],
+        );
+
+        let result = list_deprecated_versions_from(
+            &format!("http://{address}"),
+            &STANDARD.encode(signing.verifying_key().to_bytes()),
+            "test",
+            "windows-x64",
+            "0.4.14",
+        );
+        server.join().unwrap();
+
+        assert!(matches!(
+            result,
+            Err(UpdateError::Manifest(
+                crate::manifest::ManifestError::HistoryTarget
+            ))
+        ));
+    }
+
+    #[test]
+    fn downgrade_to_version_from_rejects_a_target_missing_from_history() {
+        let signing = SigningKey::from_bytes(&[44_u8; 32]);
+        let history_bytes = signed_history_bytes(
+            &signing,
+            "test",
+            "windows-x64",
+            &[("0.4.14", "2026-08-01T00:00:00Z")],
+        );
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = serve_sequential_responses(
+            listener,
+            vec![("/channels/test/windows-x64/history.json", history_bytes)],
+        );
+
+        let root = tempfile::tempdir().unwrap();
+        let result = downgrade_to_version_from(
+            &format!("http://{address}"),
+            &STANDARD.encode(signing.verifying_key().to_bytes()),
+            "test",
+            "windows-x64",
+            root.path(),
+            "0.4.13",
+            "0.2.11",
+            |_| {},
+        );
+        server.join().unwrap();
+
+        assert!(matches!(
+            result,
+            Err(UpdateError::Manifest(
+                crate::manifest::ManifestError::HistoryVersionMissing
+            ))
+        ));
+    }
+
+    #[test]
+    fn downgrade_to_version_from_rejects_a_launcher_that_is_too_old() {
+        let signing = SigningKey::from_bytes(&[45_u8; 32]);
+        let history_bytes = signed_history_bytes(
+            &signing,
+            "test",
+            "windows-x64",
+            &[
+                ("0.4.14", "2026-08-01T00:00:00Z"),
+                ("0.4.13", "2026-07-01T00:00:00Z"),
+            ],
+        );
+        let manifest_bytes = signed_downgrade_manifest_bytes(
+            &signing,
+            "test",
+            "windows-x64",
+            "0.4.13",
+            "0.3.0",
+            vec![],
+        );
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = serve_sequential_responses(
+            listener,
+            vec![
+                ("/channels/test/windows-x64/history.json", history_bytes),
+                (
+                    "/channels/test/windows-x64/manifests/0.4.13.json",
+                    manifest_bytes,
+                ),
+            ],
+        );
+
+        let root = tempfile::tempdir().unwrap();
+        let result = downgrade_to_version_from(
+            &format!("http://{address}"),
+            &STANDARD.encode(signing.verifying_key().to_bytes()),
+            "test",
+            "windows-x64",
+            root.path(),
+            "0.4.13",
+            "0.2.11",
+            |_| {},
+        );
+        server.join().unwrap();
+
+        assert!(matches!(result, Err(UpdateError::DowngradeLauncherTooOld)));
+    }
+
+    #[test]
+    fn downgrade_to_version_from_rejects_an_incomplete_installation() {
+        let signing = SigningKey::from_bytes(&[46_u8; 32]);
+        let history_bytes = signed_history_bytes(
+            &signing,
+            "test",
+            "windows-x64",
+            &[
+                ("0.4.14", "2026-08-01T00:00:00Z"),
+                ("0.4.13", "2026-07-01T00:00:00Z"),
+            ],
+        );
+        let manifest_bytes = signed_downgrade_manifest_bytes(
+            &signing,
+            "test",
+            "windows-x64",
+            "0.4.13",
+            "0.2.0",
+            vec![],
+        );
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = serve_sequential_responses(
+            listener,
+            vec![
+                ("/channels/test/windows-x64/history.json", history_bytes),
+                (
+                    "/channels/test/windows-x64/manifests/0.4.13.json",
+                    manifest_bytes,
+                ),
+            ],
+        );
+
+        // An empty root has no game JAR, Java, or plugin, so it can never be
+        // reported ready regardless of what the host running the tests has
+        // installed.
+        let root = tempfile::tempdir().unwrap();
+        let result = downgrade_to_version_from(
+            &format!("http://{address}"),
+            &STANDARD.encode(signing.verifying_key().to_bytes()),
+            "test",
+            "windows-x64",
+            root.path(),
+            "0.4.13",
+            "0.2.11",
+            |_| {},
+        );
+        server.join().unwrap();
+
+        assert!(matches!(
+            result,
+            Err(UpdateError::DowngradeInstallationNotReady)
+        ));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn downgrade_to_version_from_rejects_a_target_without_the_game_jar() {
+        let signing = SigningKey::from_bytes(&[47_u8; 32]);
+        let history_bytes = signed_history_bytes(
+            &signing,
+            "test",
+            "windows-x64",
+            &[
+                ("0.4.14", "2026-08-01T00:00:00Z"),
+                ("0.4.13", "2026-07-01T00:00:00Z"),
+            ],
+        );
+        let manifest_bytes = signed_downgrade_manifest_bytes(
+            &signing,
+            "test",
+            "windows-x64",
+            "0.4.13",
+            "0.2.0",
+            vec![json!({
+                "path": "runtime/bin/java.exe",
+                "sha256": format!("{:x}", Sha256::digest(b"java")),
+                "size": 4,
+                "executable": true
+            })],
+        );
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = serve_sequential_responses(
+            listener,
+            vec![
+                ("/channels/test/windows-x64/history.json", history_bytes),
+                (
+                    "/channels/test/windows-x64/manifests/0.4.13.json",
+                    manifest_bytes,
+                ),
+            ],
+        );
+
+        let root = tempfile::tempdir().unwrap();
+        make_ready_installation(root.path(), b"old-jar-body");
+        let result = downgrade_to_version_from(
+            &format!("http://{address}"),
+            &STANDARD.encode(signing.verifying_key().to_bytes()),
+            "test",
+            "windows-x64",
+            root.path(),
+            "0.4.13",
+            "0.2.11",
+            |_| {},
+        );
+        server.join().unwrap();
+
+        assert!(matches!(result, Err(UpdateError::DowngradeArtifactMissing)));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn downgrade_to_version_from_replaces_only_the_game_jar() {
+        let signing = SigningKey::from_bytes(&[48_u8; 32]);
+        let history_bytes = signed_history_bytes(
+            &signing,
+            "test",
+            "windows-x64",
+            &[
+                ("0.4.14", "2026-08-01T00:00:00Z"),
+                ("0.4.13", "2026-07-01T00:00:00Z"),
+            ],
+        );
+        let new_jar_bytes = b"new-jar-body".to_vec();
+        let manifest_bytes = signed_downgrade_manifest_bytes(
+            &signing,
+            "test",
+            "windows-x64",
+            "0.4.13",
+            "0.2.0",
+            vec![json!({
+                "path": CANONICAL_GAME_JAR,
+                "sha256": format!("{:x}", Sha256::digest(&new_jar_bytes)),
+                "size": new_jar_bytes.len(),
+                "executable": false
+            })],
+        );
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = serve_sequential_responses(
+            listener,
+            vec![
+                ("/channels/test/windows-x64/history.json", history_bytes),
+                (
+                    "/channels/test/windows-x64/manifests/0.4.13.json",
+                    manifest_bytes,
+                ),
+                (
+                    "/channels/test/windows-x64/releases/0.4.13/Arena-oraja.jar",
+                    new_jar_bytes.clone(),
+                ),
+            ],
+        );
+
+        let root = tempfile::tempdir().unwrap();
+        make_ready_installation(root.path(), b"old-jar-body");
+        let plugin_before = fs::read(root.path().join("ir/bms_ir_arena_oraja_0.0.69.jar")).unwrap();
+        let java_before = fs::read(root.path().join("runtime/bin/java")).unwrap();
+
+        let manifest = downgrade_to_version_from(
+            &format!("http://{address}"),
+            &STANDARD.encode(signing.verifying_key().to_bytes()),
+            "test",
+            "windows-x64",
+            root.path(),
+            "0.4.13",
+            "0.2.11",
+            |_| {},
+        )
+        .unwrap();
+        server.join().unwrap();
+
+        assert_eq!(manifest.version, "0.4.13");
+        assert_eq!(
+            fs::read(root.path().join(CANONICAL_GAME_JAR)).unwrap(),
+            new_jar_bytes
+        );
+        assert_eq!(
+            fs::read(root.path().join("ir/bms_ir_arena_oraja_0.0.69.jar")).unwrap(),
+            plugin_before
+        );
+        assert_eq!(
+            fs::read(root.path().join("runtime/bin/java")).unwrap(),
+            java_before
+        );
+        assert!(!root
+            .path()
+            .join(STAGING_DIRECTORY)
+            .join("downgrade.jar.previous")
+            .exists());
     }
 }

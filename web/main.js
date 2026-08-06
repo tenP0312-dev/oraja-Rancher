@@ -38,7 +38,15 @@ const dictionary = {
     verifying: "ダウンロードしたファイルを検証中",
     applying: "更新を適用中",
     restarting: "新しいランチャーを起動中",
-    progressFiles: "{done} / {total} ファイル"
+    progressFiles: "{done} / {total} ファイル",
+    deprecatedToggle: "非推奨版から選択",
+    deprecatedHide: "非推奨版一覧を閉じる",
+    deprecatedLoading: "読み込んでいます…",
+    deprecatedEmpty: "非推奨版はありません",
+    deprecatedLoadError: "非推奨版の一覧を取得できませんでした",
+    downgradeButton: "ダウングレード",
+    downgradeConfirm: "本体を {version}（配信日時: {datetime}）にダウングレードします。Java、プラグイン、設定、スキン、スコアデータは変更されません。よろしいですか？",
+    downgradeSuccess: "ダウングレードが完了しました"
   },
   en: {
     checking: "Checking for updates",
@@ -76,7 +84,15 @@ const dictionary = {
     verifying: "Verifying downloaded files",
     applying: "Applying update",
     restarting: "Starting the updated launcher",
-    progressFiles: "{done} / {total} files"
+    progressFiles: "{done} / {total} files",
+    deprecatedToggle: "Choose a deprecated version",
+    deprecatedHide: "Hide deprecated versions",
+    deprecatedLoading: "Loading…",
+    deprecatedEmpty: "No deprecated versions are available",
+    deprecatedLoadError: "Could not load the deprecated version list",
+    downgradeButton: "Downgrade",
+    downgradeConfirm: "Downgrade the game to {version} (published {datetime}). Java, the plugin, settings, skins, and score data will not be touched. Continue?",
+    downgradeSuccess: "Downgrade complete"
   }
 };
 
@@ -87,6 +103,10 @@ let checking = true;
 let updateUnavailable = false;
 let installingUpdate = false;
 let updateProgress = null;
+let deprecatedVersions = null;
+let deprecatedVisible = false;
+let deprecatedLoading = false;
+let downgradingVersion = null;
 const byId = id => document.getElementById(id);
 const tr = key => dictionary[language][key];
 
@@ -100,6 +120,7 @@ function applyLanguage() {
   byId("language").title = tr("switchLanguage");
   renderUpdate();
   renderProgress();
+  renderDeprecated();
 }
 
 function setStatus(text, kind = "neutral") {
@@ -148,6 +169,98 @@ function renderProgress() {
   byId("progress-bar").textContent = `${percent}%`;
   byId("progress-detail").textContent = `${formatBytes(bytesDone)} / ${formatBytes(bytesTotal)}  ·  ${files}`;
   container.hidden = false;
+}
+
+function renderDeprecated() {
+  const toggle = byId("deprecated-toggle");
+  const container = byId("deprecated-list-container");
+  const loading = byId("deprecated-loading");
+  const empty = byId("deprecated-empty");
+  const list = byId("deprecated-list");
+  toggle.textContent = tr(deprecatedVisible ? "deprecatedHide" : "deprecatedToggle");
+  toggle.setAttribute("aria-expanded", String(deprecatedVisible));
+  toggle.disabled = checking || installingUpdate;
+  container.hidden = !deprecatedVisible;
+  if (!deprecatedVisible) return;
+  loading.hidden = !deprecatedLoading;
+  list.replaceChildren();
+  if (deprecatedLoading) {
+    empty.hidden = true;
+    return;
+  }
+  const versions = Array.isArray(deprecatedVersions) ? deprecatedVersions : [];
+  empty.hidden = versions.length > 0;
+  versions.forEach(entry => {
+    const item = document.createElement("li");
+    const label = document.createElement("span");
+    const publishedAt = formatPublishedAt(entry.published_at);
+    label.textContent = publishedAt ? `${entry.version}  ·  ${publishedAt}` : entry.version;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "quiet";
+    button.textContent = downgradingVersion === entry.version ? tr("applying") : tr("downgradeButton");
+    button.disabled = Boolean(downgradingVersion) || installingUpdate || checking;
+    button.addEventListener("click", () => confirmAndDowngrade(entry));
+    item.append(label, button);
+    list.append(item);
+  });
+}
+
+async function toggleDeprecated() {
+  deprecatedVisible = !deprecatedVisible;
+  if (deprecatedVisible && deprecatedVersions === null && !deprecatedLoading) {
+    deprecatedLoading = true;
+    renderDeprecated();
+    try {
+      deprecatedVersions = await invoke("list_deprecated_versions");
+      hideError();
+    } catch (error) {
+      deprecatedVersions = [];
+      showError(error);
+      setStatus(tr("deprecatedLoadError"), "error");
+    } finally {
+      deprecatedLoading = false;
+      renderDeprecated();
+    }
+    return;
+  }
+  renderDeprecated();
+}
+
+function confirmAndDowngrade(entry) {
+  const datetime = formatPublishedAt(entry.published_at) || entry.published_at || "";
+  const message = tr("downgradeConfirm")
+    .replace("{version}", entry.version)
+    .replace("{datetime}", datetime);
+  if (!window.confirm(message)) return;
+  downgrade(entry.version);
+}
+
+async function downgrade(version) {
+  downgradingVersion = version;
+  installingUpdate = true;
+  updateProgress = {phase: "downloading", bytes_done: 0, bytes_total: 0, files_done: 0, files_total: 1};
+  renderProgress();
+  renderDeprecated();
+  renderUpdate();
+  setStatus(tr("applying"), "available");
+  try {
+    await invoke("downgrade_to_version", {version});
+    hideError();
+    deprecatedVersions = null;
+    deprecatedVisible = false;
+    await loadState();
+    if (state) await checkUpdate();
+  } catch (error) {
+    showError(error);
+  } finally {
+    downgradingVersion = null;
+    installingUpdate = false;
+    updateProgress = null;
+    renderProgress();
+    renderDeprecated();
+    renderUpdate();
+  }
 }
 
 function renderSafeMarkdown(markdown) {
@@ -238,6 +351,7 @@ function renderUpdate() {
     .replace("{version}", state.launcher_version);
   byId("update-panel").hidden = !update || update.status === "current";
   renderAnnouncements();
+  renderDeprecated();
   if (checking) {
     setStatus(tr("checking"), "neutral");
     return;
@@ -375,6 +489,7 @@ byId("configure").addEventListener("click", () => launch(true));
 byId("check").addEventListener("click", checkUpdate);
 byId("update-launch").addEventListener("click", installAndLaunch);
 byId("launch-current").addEventListener("click", () => launch(false));
+byId("deprecated-toggle").addEventListener("click", toggleDeprecated);
 
 if (listen) {
   await listen("arena-update-progress", event => {
