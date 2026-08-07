@@ -62,7 +62,6 @@ const dictionary = {
     releaseNotesToggle: "リリースノートを見る",
     availableSize: "ダウンロードサイズ: 約{size}",
     settingsOpen: "設定",
-    settingsBack: "戻る",
     settingsTitle: "設定",
     settingsResident: "常駐(トレイ)を有効にする",
     settingsResidentHint: "閉じてもトレイに残り続けます",
@@ -133,7 +132,6 @@ const dictionary = {
     releaseNotesToggle: "View release notes",
     availableSize: "Download size: about {size}",
     settingsOpen: "Settings",
-    settingsBack: "Back",
     settingsTitle: "Settings",
     settingsResident: "Enable tray residency",
     settingsResidentHint: "Keeps running in the tray after you close the window",
@@ -165,6 +163,7 @@ let deprecatedLoading = false;
 let downgradingVersion = null;
 let settingsVisible = false;
 let launcherSettings = null;
+const deprecatedNotesCache = {};
 const byId = id => document.getElementById(id);
 const tr = key => dictionary[language][key];
 
@@ -265,6 +264,8 @@ function renderDeprecated() {
   empty.hidden = versions.length > 0;
   versions.forEach(entry => {
     const item = document.createElement("li");
+    const row = document.createElement("div");
+    row.className = "deprecated-row";
     const label = document.createElement("span");
     const publishedAt = formatPublishedAt(entry.published_at);
     const versionLabel = `${entry.version} ${deprecatedVersionKind()}`;
@@ -275,9 +276,37 @@ function renderDeprecated() {
     button.textContent = downgradingVersion === entry.version ? tr("applying") : tr("downgradeButton");
     button.disabled = Boolean(downgradingVersion) || installingUpdate || checking;
     button.addEventListener("click", () => confirmAndDowngrade(entry));
-    item.append(label, button);
+    row.append(label, button);
+
+    const details = document.createElement("details");
+    const summary = document.createElement("summary");
+    summary.textContent = tr("releaseNotesToggle");
+    const notes = document.createElement("div");
+    notes.className = "notes";
+    details.append(summary, notes);
+    details.addEventListener("toggle", () => {
+      if (details.open) loadDeprecatedNotes(entry.version, notes);
+    });
+
+    item.append(row, details);
     list.append(item);
   });
+}
+
+async function loadDeprecatedNotes(version, container) {
+  const cached = deprecatedNotesCache[version];
+  if (cached) {
+    renderSafeMarkdown(pickLocalizedNotes(cached), container);
+    return;
+  }
+  container.textContent = tr("deprecatedLoading");
+  try {
+    const notes = await invoke("fetch_deprecated_version_notes", {version});
+    deprecatedNotesCache[version] = notes;
+    renderSafeMarkdown(pickLocalizedNotes(notes), container);
+  } catch (error) {
+    container.textContent = tr("deprecatedLoadError");
+  }
 }
 
 async function toggleDeprecated() {
@@ -337,8 +366,7 @@ async function downgrade(version) {
   }
 }
 
-function renderSafeMarkdown(markdown) {
-  const target = byId("release-notes");
+function renderSafeMarkdown(markdown, target = byId("release-notes")) {
   target.replaceChildren();
   let list = null;
   String(markdown || "").split(/\r?\n/).forEach(raw => {
@@ -378,12 +406,16 @@ function updateBlocksLaunch() {
     || (update.status === "available" && update.mandatory);
 }
 
-function localizedReleaseNotes() {
-  if (!update) return "";
+function pickLocalizedNotes(notes) {
+  if (!notes) return "";
   const localized = language === "ja"
-    ? update.release_notes_markdown_ja
-    : update.release_notes_markdown_en;
-  return localized || update.release_notes_markdown || "";
+    ? notes.release_notes_markdown_ja
+    : notes.release_notes_markdown_en;
+  return localized || notes.release_notes_markdown || "";
+}
+
+function localizedReleaseNotes() {
+  return pickLocalizedNotes(update);
 }
 
 function renderAnnouncements() {
@@ -525,10 +557,10 @@ function renderSettings() {
   byId("setting-autostart").disabled = !launcherSettings.resident;
 }
 
-async function openSettings() {
-  settingsVisible = true;
+async function toggleSettings() {
+  settingsVisible = !settingsVisible;
   renderSettings();
-  if (!launcherSettings && invoke) {
+  if (settingsVisible && !launcherSettings && invoke) {
     try {
       launcherSettings = await invoke("get_launcher_settings");
     } catch (error) {
@@ -537,11 +569,6 @@ async function openSettings() {
     }
     renderSettings();
   }
-}
-
-function closeSettings() {
-  settingsVisible = false;
-  renderSettings();
 }
 
 async function updateLauncherSetting(key, value) {
@@ -666,8 +693,7 @@ byId("configure").addEventListener("click", () => launch(true));
 byId("check").addEventListener("click", checkUpdate);
 byId("update-launch").addEventListener("click", () => installAndLaunch(true));
 byId("update-only").addEventListener("click", () => installAndLaunch(false));
-byId("settings-open").addEventListener("click", openSettings);
-byId("settings-back").addEventListener("click", closeSettings);
+byId("settings-open").addEventListener("click", toggleSettings);
 byId("setting-resident").addEventListener("change", event => updateLauncherSetting("resident", event.target.checked));
 byId("setting-autostart").addEventListener("change", event => updateLauncherSetting("autostart", event.target.checked));
 byId("setting-background-check").addEventListener("change", event => updateLauncherSetting("background_check", event.target.checked));

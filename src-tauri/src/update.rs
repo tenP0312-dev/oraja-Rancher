@@ -350,6 +350,48 @@ fn list_deprecated_versions_from(
         .collect())
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct VersionNotes {
+    pub release_notes_markdown: String,
+    pub release_notes_markdown_ja: String,
+    pub release_notes_markdown_en: String,
+}
+
+/// Fetches and verifies just the release notes for one specific version
+/// from the signed history — used to lazily show a deprecated entry's own
+/// notes only once the operator expands it, instead of fetching every
+/// history entry's full manifest up front.
+pub fn fetch_version_notes(version: &str) -> Result<VersionNotes, UpdateError> {
+    fetch_version_notes_from(
+        update_base_url()?,
+        release_public_key()?,
+        &channel(),
+        platform(),
+        version,
+    )
+}
+
+fn fetch_version_notes_from(
+    base_url: &str,
+    public_key: &str,
+    selected_channel: &str,
+    selected_platform: &str,
+    version: &str,
+) -> Result<VersionNotes, UpdateError> {
+    let manifest = fetch_versioned_manifest_from(
+        base_url,
+        public_key,
+        selected_channel,
+        selected_platform,
+        version,
+    )?;
+    Ok(VersionNotes {
+        release_notes_markdown: manifest.release_notes_markdown,
+        release_notes_markdown_ja: manifest.release_notes_markdown_ja,
+        release_notes_markdown_en: manifest.release_notes_markdown_en,
+    })
+}
+
 fn fetch_versioned_manifest_from(
     base_url: &str,
     public_key: &str,
@@ -2276,5 +2318,56 @@ mod tests {
             .join(STAGING_DIRECTORY)
             .join("downgrade.jar.previous")
             .exists());
+    }
+
+    #[test]
+    fn fetch_version_notes_from_returns_that_versions_own_localized_notes() {
+        let signing = SigningKey::from_bytes(&[52_u8; 32]);
+        let mut manifest = json!({
+            "schema_version": 1,
+            "channel": "test",
+            "platform": "windows-x64",
+            "version": "0.4.14.18",
+            "published_at": "2026-08-01T00:00:00Z",
+            "release_notes_markdown": "",
+            "release_notes_markdown_ja": "## 修正\n- 旧バージョンの説明",
+            "release_notes_markdown_en": "## Fixes\n- Notes for the old version",
+            "mandatory": false,
+            "minimum_launcher_version": "0.2.0",
+            "revoked_versions": [],
+            "artifacts": [],
+        });
+        let signature = signing.sign(&serde_jcs::to_vec(&manifest).unwrap());
+        manifest["signature"] = Value::String(STANDARD.encode(signature.to_bytes()));
+        let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = serve_sequential_responses(
+            listener,
+            vec![(
+                "/channels/test/windows-x64/manifests/0.4.14.18.json",
+                manifest_bytes,
+            )],
+        );
+
+        let notes = fetch_version_notes_from(
+            &format!("http://{address}"),
+            &STANDARD.encode(signing.verifying_key().to_bytes()),
+            "test",
+            "windows-x64",
+            "0.4.14.18",
+        )
+        .unwrap();
+        server.join().unwrap();
+
+        assert_eq!(
+            notes.release_notes_markdown_ja,
+            "## 修正\n- 旧バージョンの説明"
+        );
+        assert_eq!(
+            notes.release_notes_markdown_en,
+            "## Fixes\n- Notes for the old version"
+        );
     }
 }
