@@ -1,5 +1,6 @@
 mod install;
 mod manifest;
+mod settings;
 mod update;
 
 use install::InstallationInfo;
@@ -7,9 +8,17 @@ use serde::Serialize;
 use std::env;
 use std::fs;
 use std::path::Path;
-use tauri::{AppHandle, Emitter};
+use std::time::Duration;
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::TrayIconBuilder;
+use tauri::{AppHandle, Emitter, Manager, WindowEvent};
+use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
+use tauri_plugin_notification::NotificationExt;
 
 const UPDATE_PROGRESS_EVENT: &str = "arena-update-progress";
+const MAIN_WINDOW_LABEL: &str = "main";
+const BACKGROUND_CHECK_INTERVAL_MILLIS: u64 = 24 * 60 * 60 * 1000;
+const BACKGROUND_POLL_INTERVAL: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Debug, Serialize)]
 struct LauncherState {
@@ -171,6 +180,137 @@ async fn downgrade_to_version(app: AppHandle, version: String) -> Result<String,
 }
 
 #[tauri::command]
+fn get_launcher_settings() -> Result<settings::LauncherSettings, String> {
+    let root = install::launcher_install_root().map_err(|error| error.to_string())?;
+    Ok(settings::load_settings(&root))
+}
+
+#[tauri::command]
+fn set_launcher_settings(
+    app: AppHandle,
+    settings: settings::LauncherSettings,
+) -> Result<(), String> {
+    let root = install::launcher_install_root().map_err(|error| error.to_string())?;
+    settings::save_settings(&root, &settings).map_err(|error| error.to_string())?;
+    apply_autostart_setting(&app, settings.autostart)
+}
+
+fn apply_autostart_setting(app: &AppHandle, enabled: bool) -> Result<(), String> {
+    let manager = app.autolaunch();
+    let result = if enabled {
+        manager.enable()
+    } else {
+        manager.disable()
+    };
+    result.map_err(|error| error.to_string())
+}
+
+fn current_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Runs on its own OS thread for the life of the app. Sleeps in short
+/// increments and only performs an actual check once the background-check
+/// setting is on and 24 hours have passed, so toggling the setting takes
+/// effect on the next poll without needing to start/stop the thread.
+fn spawn_background_check_loop(app: AppHandle) {
+    std::thread::spawn(move || loop {
+        run_background_check_once(&app);
+        std::thread::sleep(BACKGROUND_POLL_INTERVAL);
+    });
+}
+
+fn run_background_check_once(app: &AppHandle) {
+    let Ok(root) = install::launcher_install_root() else {
+        return;
+    };
+    let mut current = settings::load_settings(&root);
+    if !current.background_check {
+        return;
+    }
+    let now = current_millis();
+    if now.saturating_sub(current.last_background_check_millis) < BACKGROUND_CHECK_INTERVAL_MILLIS {
+        return;
+    }
+    let Ok(installation) = install::inspect(&root) else {
+        return;
+    };
+    let ready = install::is_ready(&installation);
+    current.last_background_check_millis = now;
+    if let Ok(info) = update::check_installation(&root, ready) {
+        let should_notify = matches!(info.status.as_str(), "available" | "install_required")
+            && info.available_version != current.last_notified_version;
+        if should_notify {
+            send_update_notification(app, &info.available_version);
+            current.last_notified_version = info.available_version.clone();
+        }
+    }
+    let _ = settings::save_settings(&root, &current);
+}
+
+fn send_update_notification(app: &AppHandle, version: &str) {
+    let _ = app
+        .notification()
+        .builder()
+        .title(format!("BMS-IR Arena {version} が利用できます"))
+        .body("ランチャーを開いて更新してください")
+        .show();
+}
+
+fn show_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+fn build_tray(app: &tauri::App) -> tauri::Result<()> {
+    let open_item = MenuItem::with_id(app, "open", "開く / Open", true, None::<&str>)?;
+    let launch_item = MenuItem::with_id(
+        app,
+        "launch",
+        "Arenaを起動 / Launch Arena",
+        true,
+        None::<&str>,
+    )?;
+    let check_item = MenuItem::with_id(
+        app,
+        "check",
+        "更新を確認 / Check for updates",
+        true,
+        None::<&str>,
+    )?;
+    let quit_item = MenuItem::with_id(app, "quit", "終了 / Quit", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&open_item, &launch_item, &check_item, &quit_item])?;
+
+    let mut builder = TrayIconBuilder::new()
+        .menu(&menu)
+        .show_menu_on_left_click(true)
+        .tooltip("BMS-IR Arena");
+    if let Some(icon) = app.default_window_icon() {
+        builder = builder.icon(icon.clone());
+    }
+    builder
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "open" => show_main_window(app),
+            "launch" => {
+                let _ = launch_game(app.clone(), false);
+            }
+            "check" => {
+                show_main_window(app);
+                let _ = app.emit("arena-tray-check-requested", ());
+            }
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .build(app)?;
+    Ok(())
+}
+
+#[tauri::command]
 fn launch_game(app: AppHandle, configuration: bool) -> Result<(), String> {
     let root = install::launcher_install_root().map_err(|error| error.to_string())?;
     let installation = install::inspect(&root).map_err(|error| error.to_string())?;
@@ -202,14 +342,40 @@ pub fn run() {
     }
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec![]),
+        ))
         .invoke_handler(tauri::generate_handler![
             launcher_state,
             check_online_update,
             install_online_update,
             list_deprecated_versions,
             downgrade_to_version,
+            get_launcher_settings,
+            set_launcher_settings,
             launch_game
         ])
+        .on_window_event(|window, event| {
+            if window.label() != MAIN_WINDOW_LABEL {
+                return;
+            }
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                let resident = install::launcher_install_root()
+                    .map(|root| settings::load_settings(&root).resident)
+                    .unwrap_or(false);
+                if resident {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
+        .setup(|app| {
+            build_tray(app)?;
+            spawn_background_check_loop(app.handle().clone());
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("BMS-IR Arena Launcher failed");
 }

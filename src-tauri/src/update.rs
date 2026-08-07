@@ -89,6 +89,11 @@ pub struct UpdateInfo {
     pub release_notes_markdown_ja: String,
     pub release_notes_markdown_en: String,
     pub announcements: Vec<ReleaseAnnouncement>,
+    /// Sum of every artifact's size in the signed manifest, for an
+    /// approximate "this update is about N MB" preview. An ordinary update
+    /// only downloads changed files, so the real transfer is often smaller
+    /// than this; it is an upper bound, not the exact delta size.
+    pub total_artifact_bytes: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -625,6 +630,7 @@ fn update_info_from_release(
         release_notes_markdown_ja,
         release_notes_markdown_en,
         announcements: release.announcements.clone(),
+        total_artifact_bytes: release.artifacts.iter().map(|artifact| artifact.size).sum(),
     })
 }
 

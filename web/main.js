@@ -57,7 +57,22 @@ const dictionary = {
     statusUpdateAvailable: "更新あり",
     statusMandatory: "必須更新",
     statusRevoked: "利用停止中",
-    statusLauncherTooOld: "ランチャー要更新"
+    statusLauncherTooOld: "ランチャー要更新",
+    updateOnly: "更新のみ",
+    releaseNotesToggle: "リリースノートを見る",
+    availableSize: "ダウンロードサイズ: 約{size}",
+    settingsOpen: "設定",
+    settingsBack: "戻る",
+    settingsTitle: "設定",
+    settingsResident: "常駐(トレイ)を有効にする",
+    settingsResidentHint: "閉じてもトレイに残り続けます",
+    settingsAutostart: "ログイン時に自動起動",
+    settingsAutostartHint: "常駐が必要です",
+    settingsBackgroundCheck: "バックグラウンド自動チェック",
+    settingsBackgroundCheckHint: "1日1回、自動で更新を確認し、見つかったら通知します",
+    settingsSaveError: "設定を保存できませんでした",
+    notificationUpdateTitle: "BMS-IR Arena {version} が利用できます",
+    notificationUpdateBody: "ランチャーを開いて更新してください"
   },
   en: {
     checking: "Checking for updates",
@@ -113,7 +128,22 @@ const dictionary = {
     statusUpdateAvailable: "Update available",
     statusMandatory: "Required update",
     statusRevoked: "Revoked",
-    statusLauncherTooOld: "Launcher needs updating"
+    statusLauncherTooOld: "Launcher needs updating",
+    updateOnly: "Update only",
+    releaseNotesToggle: "View release notes",
+    availableSize: "Download size: about {size}",
+    settingsOpen: "Settings",
+    settingsBack: "Back",
+    settingsTitle: "Settings",
+    settingsResident: "Enable tray residency",
+    settingsResidentHint: "Keeps running in the tray after you close the window",
+    settingsAutostart: "Launch at login",
+    settingsAutostartHint: "Requires tray residency",
+    settingsBackgroundCheck: "Automatic background check",
+    settingsBackgroundCheckHint: "Checks for updates once a day and notifies you if one is found",
+    settingsSaveError: "Could not save settings",
+    notificationUpdateTitle: "BMS-IR Arena {version} is available",
+    notificationUpdateBody: "Open the launcher to update"
   }
 };
 
@@ -133,6 +163,8 @@ let deprecatedVersions = null;
 let deprecatedVisible = false;
 let deprecatedLoading = false;
 let downgradingVersion = null;
+let settingsVisible = false;
+let launcherSettings = null;
 const byId = id => document.getElementById(id);
 const tr = key => dictionary[language][key];
 
@@ -140,6 +172,11 @@ function applyLanguage() {
   document.documentElement.lang = language;
   document.querySelectorAll("[data-i18n]").forEach(element => {
     element.textContent = tr(element.dataset.i18n);
+  });
+  document.querySelectorAll("[data-i18n-aria-label]").forEach(element => {
+    const label = tr(element.dataset.i18nAriaLabel);
+    element.setAttribute("aria-label", label);
+    element.title = label;
   });
   byId("language-label").textContent = language === "ja" ? "日本語" : "English";
   byId("language").setAttribute("aria-label", tr("switchLanguage"));
@@ -451,11 +488,17 @@ function renderUpdate() {
   byId("available-published-at").textContent = publishedAt
     ? tr("publishedAt").replace("{datetime}", publishedAt)
     : "";
+  const totalBytes = Number(update.total_artifact_bytes) || 0;
+  byId("available-size").textContent = totalBytes > 0
+    ? tr("availableSize").replace("{size}", formatBytes(totalBytes))
+    : "";
   byId("update-launch").textContent = installing ? tr("installLaunch") : tr("updateLaunch");
+  byId("update-only").hidden = installing;
   renderSafeMarkdown(localizedReleaseNotes());
   byId("launch-current").disabled = blocked || !installed;
   byId("play").disabled = blocked || !installed;
   byId("configure").disabled = blocked || !installed;
+  byId("update-only").disabled = blocked;
   if (update.status === "revoked") {
     setStatus(tr("revoked"), "error");
   } else if (update.status === "launcher_too_old") {
@@ -466,6 +509,59 @@ function renderUpdate() {
     setStatus(byId("available-title").textContent, "available");
   } else {
     setStatus(byId("available-title").textContent, "available");
+  }
+}
+
+function renderSettings() {
+  byId("settings-view").hidden = !settingsVisible;
+  byId("main-view").hidden = settingsVisible;
+  if (!settingsVisible || !launcherSettings) return;
+  byId("setting-resident").checked = launcherSettings.resident;
+  byId("setting-autostart").checked = launcherSettings.autostart;
+  byId("setting-background-check").checked = launcherSettings.background_check;
+  // Autostart only makes sense while the launcher can actually stay
+  // resident to be woken back up; keep it visibly tied to that toggle
+  // instead of silently ignoring it.
+  byId("setting-autostart").disabled = !launcherSettings.resident;
+}
+
+async function openSettings() {
+  settingsVisible = true;
+  renderSettings();
+  if (!launcherSettings && invoke) {
+    try {
+      launcherSettings = await invoke("get_launcher_settings");
+    } catch (error) {
+      launcherSettings = {resident: false, autostart: false, background_check: false};
+      showError(error);
+    }
+    renderSettings();
+  }
+}
+
+function closeSettings() {
+  settingsVisible = false;
+  renderSettings();
+}
+
+async function updateLauncherSetting(key, value) {
+  if (!launcherSettings) return;
+  const previous = launcherSettings[key];
+  launcherSettings = {...launcherSettings, [key]: value};
+  if (key === "resident" && !value) {
+    // Autostart without residency would just reopen a normal window on
+    // login with nothing keeping it running; turn it off alongside.
+    launcherSettings.autostart = false;
+  }
+  renderSettings();
+  try {
+    await invoke("set_launcher_settings", {settings: launcherSettings});
+    hideError();
+  } catch (error) {
+    launcherSettings = {...launcherSettings, [key]: previous};
+    renderSettings();
+    showError(error);
+    setStatus(tr("settingsSaveError"), "error");
   }
 }
 
@@ -528,29 +624,35 @@ async function launch(configuration = false) {
   }
 }
 
-async function installAndLaunch() {
+async function installAndLaunch(launchAfter) {
   installingUpdate = true;
   updateProgress = {
     phase: "downloading",
     bytes_done: 0,
-    bytes_total: Array.isArray(update?.artifacts)
-      ? update.artifacts.reduce((total, artifact) => total + Number(artifact.size || 0), 0)
-      : 0,
+    bytes_total: Number(update?.total_artifact_bytes) || 0,
     files_done: 0,
-    files_total: Array.isArray(update?.artifacts) ? update.artifacts.length : 0
+    files_total: 0
   };
   renderProgress();
   setStatus(tr(update?.status === "install_required" ? "installing" : "updating"), "available");
   byId("update-launch").disabled = true;
+  byId("update-only").disabled = true;
   try {
-    await invoke("install_online_update", {launchAfter: true});
+    await invoke("install_online_update", {launchAfter});
+    if (!launchAfter) {
+      hideError();
+      await loadState();
+      if (state) await checkUpdate();
+    }
   } catch (error) {
+    showError(error);
+    renderUpdate();
+  } finally {
     installingUpdate = false;
     updateProgress = null;
     renderProgress();
     byId("update-launch").disabled = false;
-    showError(error);
-    renderUpdate();
+    byId("update-only").disabled = false;
   }
 }
 
@@ -562,7 +664,13 @@ byId("language").addEventListener("click", () => {
 byId("play").addEventListener("click", () => launch(false));
 byId("configure").addEventListener("click", () => launch(true));
 byId("check").addEventListener("click", checkUpdate);
-byId("update-launch").addEventListener("click", installAndLaunch);
+byId("update-launch").addEventListener("click", () => installAndLaunch(true));
+byId("update-only").addEventListener("click", () => installAndLaunch(false));
+byId("settings-open").addEventListener("click", openSettings);
+byId("settings-back").addEventListener("click", closeSettings);
+byId("setting-resident").addEventListener("change", event => updateLauncherSetting("resident", event.target.checked));
+byId("setting-autostart").addEventListener("change", event => updateLauncherSetting("autostart", event.target.checked));
+byId("setting-background-check").addEventListener("change", event => updateLauncherSetting("background_check", event.target.checked));
 byId("launch-current").addEventListener("click", () => launch(false));
 byId("deprecated-toggle").addEventListener("click", toggleDeprecated);
 byId("deprecated-more-link").addEventListener("click", event => {

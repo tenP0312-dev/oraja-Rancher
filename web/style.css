@@ -18,9 +18,63 @@ header {
   justify-content: space-between;
   gap: 16px;
 }
+.header-actions { display: flex; align-items: center; gap: 8px; }
+.icon-button {
+  min-height: 38px;
+  min-width: 38px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 17px;
+}
+#main-view { display: contents; }
+#main-view[hidden] { display: none; }
 h1 { margin: 0; font-size: 28px; letter-spacing: 0; }
 h2 { margin: 0 0 10px; font-size: 17px; letter-spacing: 0; }
 p { margin: 5px 0 0; color: #536058; }
+.settings-view { display: grid; gap: 4px; }
+.settings-view[hidden] { display: none; }
+.settings-view h2 { margin-top: 6px; }
+.settings-list { display: grid; gap: 4px; margin-top: 10px; }
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 2px;
+  border-bottom: 1px solid #d9ded9;
+  cursor: pointer;
+}
+.settings-row:last-child { border-bottom: none; }
+.settings-row-title { margin: 0; font-size: 14px; font-weight: 700; color: #17211b; }
+.settings-row-hint { margin: 2px 0 0; font-size: 12px; color: #6b756e; }
+.settings-row input[type="checkbox"] {
+  flex: 0 0 auto;
+  appearance: none;
+  width: 38px;
+  height: 22px;
+  border-radius: 999px;
+  background: #cbd2cc;
+  position: relative;
+  cursor: pointer;
+  margin: 0;
+}
+.settings-row input[type="checkbox"]::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  transition: left .12s ease;
+}
+.settings-row input[type="checkbox"]:checked { background: #23633f; }
+.settings-row input[type="checkbox"]:checked::after { left: 18px; }
+.settings-row input[type="checkbox"]:disabled { cursor: not-allowed; opacity: .5; }
+.settings-row:has(input:disabled) { cursor: not-allowed; opacity: .55; }
 .status-cards { display: grid; gap: 8px; }
 .status-card {
   display: flex;
@@ -157,7 +211,9 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   background: #fff;
 }
 .published-at { margin: 2px 0 10px; color: #6b756e; font-size: 13px; }
-.notes { max-height: 190px; margin: 10px 0 15px; overflow: auto; }
+#release-notes-details { border-top: none; padding-top: 0; margin-bottom: 12px; }
+#release-notes-details summary { font-size: 13px; color: #1769aa; font-weight: 700; }
+.notes { max-height: 190px; margin: 10px 0 0; overflow: auto; }
 .notes h3 { margin: 10px 0 5px; font-size: 15px; }
 .notes p, .notes ul { margin: 5px 0; }
 .deprecated-panel { border-top: 1px solid #cbd2cc; padding-top: 12px; }
