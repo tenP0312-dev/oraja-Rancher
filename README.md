@@ -44,6 +44,19 @@ Optional updates retain a launch-current action; mandatory or revoked versions
 do not. A client that has never downloaded the mandatory policy is still
 subject to the Arena service compatibility gate.
 
+The launcher can also list signed historical body releases as deprecated
+choices. It verifies each historical manifest before listing it and omits
+launcher-only releases that contain no `Arena-oraja.jar`. A downgrade replaces
+only that JAR with rollback protection; Java, plugins, launcher settings,
+skins, replays, and player databases remain untouched.
+
+The Arena plugin is checked independently against the signed current manifest.
+Its panel lists distinct plugin artifacts from signed historical releases,
+shows the plugin version together with the body release that carried it, and
+loads that release's verified notes on demand. Applying either the current or
+an older plugin replaces only the single `ir/bms_ir*.jar` transactionally;
+settings, skins, replays, score databases, Java, and the body JAR are preserved.
+
 Before launching, the launcher validates canonical Java, body-JAR, and root
 paths. Only at the Java process boundary it converts compatible Windows
 extended-length paths such as `\\?\C:\...` back to their ordinary form, so the
@@ -54,9 +67,11 @@ diagnostic with that log path when the game exits unsuccessfully or immediately.
 
 The signed manifest carries Japanese and English release notes plus up to 20
 newest-first announcements with an ISO date and title in both languages. The
-launcher switches this content with its `🌐 日本語` / `🌐 English` control and
-keeps the announcement list visible even when the installed version is current.
-Legacy single-language release notes remain readable as a fallback.
+launcher switches this content with its `🌐 日本語` / `🌐 English` control,
+keeps the installed current release's notes available after an update, and
+loads each deprecated release's own verified notes on demand. Announcements
+remain visible when the installed version is current. Legacy single-language
+release notes remain readable as a fallback.
 
 Rust downloads the platform manifest and artifacts. The WebView never chooses
 paths or verifies security metadata. The update is accepted only after the

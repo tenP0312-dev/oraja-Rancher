@@ -148,6 +148,75 @@ async fn install_online_update(
 }
 
 #[tauri::command]
+async fn list_deprecated_versions() -> Result<Vec<manifest::HistoryEntry>, String> {
+    let root = install::launcher_install_root().map_err(|error| error.to_string())?;
+    let current_version = update::installed_version(&root);
+    tauri::async_runtime::spawn_blocking(move || update::list_deprecated_versions(&current_version))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn fetch_deprecated_version_notes(version: String) -> Result<update::VersionNotes, String> {
+    tauri::async_runtime::spawn_blocking(move || update::fetch_version_notes(&version))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn downgrade_to_version(app: AppHandle, version: String) -> Result<String, String> {
+    let root = install::launcher_install_root().map_err(|error| error.to_string())?;
+    let launcher_version = env!("CARGO_PKG_VERSION").to_string();
+    let progress_app = app.clone();
+    let manifest = tauri::async_runtime::spawn_blocking(move || {
+        update::downgrade_to_version(&root, &version, &launcher_version, |progress| {
+            let _ = progress_app.emit(UPDATE_PROGRESS_EVENT, progress);
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())?;
+    let root = install::launcher_install_root().map_err(|error| error.to_string())?;
+    install::write_version_marker(&root, &manifest.version).map_err(|error| error.to_string())?;
+    Ok(manifest.version)
+}
+
+#[tauri::command]
+async fn check_plugin_update() -> Result<Option<update::PluginRelease>, String> {
+    let root = install::launcher_install_root().map_err(|error| error.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || update::plugin_update(&root))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn list_deprecated_plugin_versions() -> Result<Vec<update::PluginRelease>, String> {
+    tauri::async_runtime::spawn_blocking(update::list_deprecated_plugin_versions)
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn install_plugin_version(app: AppHandle, version: String) -> Result<String, String> {
+    let root = install::launcher_install_root().map_err(|error| error.to_string())?;
+    let launcher_version = env!("CARGO_PKG_VERSION").to_owned();
+    let progress_app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        update::install_plugin_version(&root, &version, &launcher_version, |progress| {
+            let _ = progress_app.emit(UPDATE_PROGRESS_EVENT, progress);
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+    .map(|release| release.version)
+}
+
+#[tauri::command]
 fn launch_game(app: AppHandle, configuration: bool) -> Result<install::LaunchInfo, String> {
     let root = install::launcher_install_root().map_err(|error| error.to_string())?;
     let installation = install::inspect(&root).map_err(|error| error.to_string())?;
@@ -195,6 +264,12 @@ pub fn run() {
             launcher_state,
             check_online_update,
             install_online_update,
+            list_deprecated_versions,
+            fetch_deprecated_version_notes,
+            downgrade_to_version,
+            check_plugin_update,
+            list_deprecated_plugin_versions,
+            install_plugin_version,
             launch_game
         ])
         .run(tauri::generate_context!())

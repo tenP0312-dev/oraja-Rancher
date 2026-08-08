@@ -30,9 +30,7 @@ const dictionary = {
     policyInvalid: "保存された更新判定を検証できません。オンライン更新確認が必要です",
     updateUnconfigured: "このランチャーには更新先が設定されていません",
     switchLanguage: "英語に切り替え",
-    bodyVersion: "本体 {version} / {channel}",
     notInstalledVersion: "未インストール",
-    launcherVersion: "Launcher {version}",
     downloading: "本体をダウンロード中",
     extracting: "本体を展開・検証中",
     verifying: "ダウンロードしたファイルを検証中",
@@ -45,7 +43,35 @@ const dictionary = {
     launchDiagnostic: "Arenaの起動診断を確認してください",
     exitCode: "終了コード",
     exitCodeUnavailable: "取得できません",
-    launchLog: "診断ログ"
+    launchLog: "診断ログ",
+    deprecatedToggle: "非推奨版から選択",
+    deprecatedHide: "非推奨版一覧を閉じる",
+    deprecatedLoading: "読み込んでいます…",
+    deprecatedEmpty: "非推奨版はありません",
+    deprecatedLoadError: "非推奨版の一覧を取得できませんでした",
+    downgradeButton: "ダウングレード",
+    downgradeConfirm: "本体を {version}（配信日時: {datetime}）にダウングレードします。Java、プラグイン、設定、スキン、リプレイ、スコアデータは変更されません。よろしいですか？",
+    downgradeSuccess: "ダウングレードが完了しました",
+    deprecatedKindTest: "(旧テストビルド)",
+    deprecatedKindStable: "(旧安定版)",
+    releaseNotesToggle: "リリースノートを見る",
+    currentRelease: "現在の本体 {version}",
+    noReleaseNotes: "この版のリリースノートはありません",
+    statusBody: "本体",
+    statusLauncher: "ランチャー",
+    statusChecking: "確認中",
+    statusUpToDate: "最新",
+    statusSetupNeeded: "セットアップ必要",
+    statusUpdateAvailable: "更新あり",
+    statusMandatory: "必須更新",
+    statusRevoked: "利用停止中",
+    statusLauncherTooOld: "ランチャー要更新",
+    pluginToggle: "Arenaプラグインの更新・旧版",
+    pluginCurrent: "プラグイン更新あり: {version}",
+    pluginCurrentOk: "プラグインは最新です",
+    pluginInstall: "このプラグインを適用",
+    pluginDeprecated: "旧プラグイン版",
+    pluginReleaseVersion: "プラグイン {plugin} / 本体リリース {release}"
   },
   en: {
     checking: "Checking for updates",
@@ -75,9 +101,7 @@ const dictionary = {
     policyInvalid: "The saved update policy is invalid. An online update check is required",
     updateUnconfigured: "This launcher has no update endpoint configured",
     switchLanguage: "Switch to Japanese",
-    bodyVersion: "Body {version} / {channel}",
     notInstalledVersion: "Not installed",
-    launcherVersion: "Launcher {version}",
     downloading: "Downloading game files",
     extracting: "Extracting and verifying game files",
     verifying: "Verifying downloaded files",
@@ -90,7 +114,35 @@ const dictionary = {
     launchDiagnostic: "Check the Arena launch diagnostic",
     exitCode: "Exit code",
     exitCodeUnavailable: "Unavailable",
-    launchLog: "Diagnostic log"
+    launchLog: "Diagnostic log",
+    deprecatedToggle: "Choose a deprecated version",
+    deprecatedHide: "Hide deprecated versions",
+    deprecatedLoading: "Loading…",
+    deprecatedEmpty: "No deprecated versions are available",
+    deprecatedLoadError: "Could not load the deprecated version list",
+    downgradeButton: "Downgrade",
+    downgradeConfirm: "Downgrade the game to {version} (published {datetime}). Java, the plugin, settings, skins, replays, and score data will not be touched. Continue?",
+    downgradeSuccess: "Downgrade complete",
+    deprecatedKindTest: "(older test build)",
+    deprecatedKindStable: "(older stable build)",
+    releaseNotesToggle: "View release notes",
+    currentRelease: "Installed body {version}",
+    noReleaseNotes: "No release notes are available for this version",
+    statusBody: "Body",
+    statusLauncher: "Launcher",
+    statusChecking: "Checking",
+    statusUpToDate: "Up to date",
+    statusSetupNeeded: "Setup needed",
+    statusUpdateAvailable: "Update available",
+    statusMandatory: "Required update",
+    statusRevoked: "Revoked",
+    statusLauncherTooOld: "Launcher needs updating",
+    pluginToggle: "Arena plugin updates and older versions",
+    pluginCurrent: "Plugin update available: {version}",
+    pluginCurrentOk: "The plugin is up to date",
+    pluginInstall: "Apply this plugin",
+    pluginDeprecated: "Older plugin release",
+    pluginReleaseVersion: "Plugin {plugin} / body release {release}"
   }
 };
 
@@ -103,6 +155,14 @@ let installingUpdate = false;
 let updateProgress = null;
 let launching = false;
 let latestLaunchExit = null;
+let deprecatedVersions = null;
+let deprecatedVisible = false;
+let deprecatedLoading = false;
+let downgradingVersion = null;
+let pluginVisible = false;
+let pluginVersions = null;
+let pluginUpdate = null;
+const deprecatedNotesCache = {};
 const byId = id => document.getElementById(id);
 const tr = key => dictionary[language][key];
 
@@ -116,6 +176,90 @@ function applyLanguage() {
   byId("language").title = tr("switchLanguage");
   renderUpdate();
   renderProgress();
+  renderDeprecated();
+  renderPlugins();
+}
+
+function renderPlugins() {
+  const toggle = byId("plugin-toggle");
+  const container = byId("plugin-list-container");
+  if (!toggle || !container) return;
+  toggle.setAttribute("aria-expanded", String(pluginVisible));
+  container.hidden = !pluginVisible;
+  if (!pluginVisible) return;
+  byId("plugin-current").textContent = pluginUpdate
+    ? tr("pluginCurrent").replace("{version}", pluginVersionLabel(pluginUpdate))
+    : tr("pluginCurrentOk");
+  const list = byId("plugin-list");
+  list.replaceChildren();
+  if (pluginUpdate) {
+    appendPluginRelease(list, pluginUpdate, false);
+  }
+  (pluginVersions || []).forEach(entry => {
+    appendPluginRelease(list, entry, true);
+  });
+}
+
+function pluginVersionLabel(entry) {
+  const filename = String(entry?.artifact_path || "").split("/").pop() || "";
+  const versionMatch = filename.match(/_(\d+(?:\.\d+)+(?:[-+][A-Za-z0-9.-]+)?)\.jar$/i);
+  return versionMatch ? versionMatch[1] : filename || String(entry?.version || "");
+}
+
+function appendPluginRelease(list, entry, deprecated) {
+  const item = document.createElement("li");
+  const row = document.createElement("div");
+  row.className = "deprecated-row";
+  const label = document.createElement("span");
+  const publishedAt = formatPublishedAt(entry.published_at) || entry.published_at;
+  const releaseLabel = tr("pluginReleaseVersion")
+    .replace("{plugin}", pluginVersionLabel(entry))
+    .replace("{release}", entry.version);
+  label.textContent = `${releaseLabel} · ${publishedAt}${deprecated ? ` (${tr("pluginDeprecated")})` : ""}`;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = deprecated ? "quiet" : "primary";
+  button.textContent = tr("pluginInstall");
+  button.disabled = installingUpdate;
+  button.addEventListener("click", () => installPlugin(entry.version));
+  row.append(label, button);
+
+  const details = document.createElement("details");
+  const summary = document.createElement("summary");
+  summary.textContent = tr("releaseNotesToggle");
+  const notes = document.createElement("div");
+  notes.className = "notes";
+  details.append(summary, notes);
+  details.addEventListener("toggle", () => {
+    if (details.open) loadDeprecatedNotes(entry.version, notes);
+  });
+  item.append(row, details);
+  list.append(item);
+}
+
+async function togglePlugins() {
+  pluginVisible = !pluginVisible;
+  if (pluginVisible && pluginVersions === null) {
+    try {
+      [pluginUpdate, pluginVersions] = await Promise.all([
+        invoke("check_plugin_update"), invoke("list_deprecated_plugin_versions")
+      ]);
+    } catch (error) { showError(error); pluginVersions = []; }
+  }
+  renderPlugins();
+}
+
+async function installPlugin(version) {
+  installingUpdate = true; updateProgress = {phase:"downloading", bytes_done:0, bytes_total:0, files_done:0, files_total:1};
+  renderUpdate(); renderProgress();
+  try {
+    await invoke("install_plugin_version", {version});
+    [pluginUpdate, pluginVersions] = await Promise.all([
+      invoke("check_plugin_update"), invoke("list_deprecated_plugin_versions")
+    ]);
+    hideError();
+  } catch (error) { showError(error); }
+  finally { installingUpdate = false; updateProgress = null; renderProgress(); renderPlugins(); renderUpdate(); }
 }
 
 function setStatus(text, kind = "neutral") {
@@ -166,9 +310,146 @@ function renderProgress() {
   container.hidden = false;
 }
 
-function renderSafeMarkdown(markdown) {
-  const target = byId("release-notes");
+function deprecatedVersionKind() {
+  // Every entry in the deprecated list is, by construction, older than the
+  // channel's currently published version (list_deprecated_versions_from
+  // excludes both the installed and the published version). Labeling each
+  // one by channel makes it unambiguous at a glance that it is an older
+  // build, not a newer one under test.
+  return state?.channel === "test" ? tr("deprecatedKindTest") : tr("deprecatedKindStable");
+}
+
+function renderDeprecated() {
+  const toggle = byId("deprecated-toggle");
+  const container = byId("deprecated-list-container");
+  const loading = byId("deprecated-loading");
+  const empty = byId("deprecated-empty");
+  const list = byId("deprecated-list");
+  toggle.textContent = tr(deprecatedVisible ? "deprecatedHide" : "deprecatedToggle");
+  toggle.setAttribute("aria-expanded", String(deprecatedVisible));
+  toggle.disabled = checking || installingUpdate;
+  container.hidden = !deprecatedVisible;
+  if (!deprecatedVisible) return;
+  loading.hidden = !deprecatedLoading;
+  list.replaceChildren();
+  if (deprecatedLoading) {
+    empty.hidden = true;
+    return;
+  }
+  const versions = Array.isArray(deprecatedVersions) ? deprecatedVersions : [];
+  empty.hidden = versions.length > 0;
+  versions.forEach(entry => {
+    const item = document.createElement("li");
+    const row = document.createElement("div");
+    row.className = "deprecated-row";
+    const label = document.createElement("span");
+    const publishedAt = formatPublishedAt(entry.published_at);
+    const versionLabel = `${entry.version} ${deprecatedVersionKind()}`;
+    label.textContent = publishedAt ? `${versionLabel}  ·  ${publishedAt}` : versionLabel;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "quiet";
+    button.textContent = downgradingVersion === entry.version ? tr("applying") : tr("downgradeButton");
+    button.disabled = Boolean(downgradingVersion) || installingUpdate || checking;
+    button.addEventListener("click", () => confirmAndDowngrade(entry));
+    row.append(label, button);
+
+    const details = document.createElement("details");
+    const summary = document.createElement("summary");
+    summary.textContent = tr("releaseNotesToggle");
+    const notes = document.createElement("div");
+    notes.className = "notes";
+    details.append(summary, notes);
+    details.addEventListener("toggle", () => {
+      if (details.open) loadDeprecatedNotes(entry.version, notes);
+    });
+
+    item.append(row, details);
+    list.append(item);
+  });
+}
+
+async function loadDeprecatedNotes(version, container) {
+  const cached = deprecatedNotesCache[version];
+  if (cached) {
+    renderSafeMarkdown(pickLocalizedNotes(cached), container);
+    return;
+  }
+  container.textContent = tr("deprecatedLoading");
+  try {
+    const notes = await invoke("fetch_deprecated_version_notes", {version});
+    deprecatedNotesCache[version] = notes;
+    renderSafeMarkdown(pickLocalizedNotes(notes), container);
+  } catch (error) {
+    container.textContent = tr("deprecatedLoadError");
+  }
+}
+
+async function toggleDeprecated() {
+  deprecatedVisible = !deprecatedVisible;
+  if (deprecatedVisible && deprecatedVersions === null && !deprecatedLoading) {
+    deprecatedLoading = true;
+    renderDeprecated();
+    try {
+      deprecatedVersions = await invoke("list_deprecated_versions");
+      hideError();
+    } catch (error) {
+      deprecatedVersions = [];
+      showError(error);
+      setStatus(tr("deprecatedLoadError"), "error");
+    } finally {
+      deprecatedLoading = false;
+      renderDeprecated();
+    }
+    return;
+  }
+  renderDeprecated();
+}
+
+function confirmAndDowngrade(entry) {
+  const datetime = formatPublishedAt(entry.published_at) || entry.published_at || "";
+  const message = tr("downgradeConfirm")
+    .replace("{version}", entry.version)
+    .replace("{datetime}", datetime);
+  if (!window.confirm(message)) return;
+  downgrade(entry.version);
+}
+
+async function downgrade(version) {
+  downgradingVersion = version;
+  installingUpdate = true;
+  updateProgress = {phase: "downloading", bytes_done: 0, bytes_total: 0, files_done: 0, files_total: 1};
+  renderProgress();
+  renderDeprecated();
+  renderUpdate();
+  setStatus(tr("applying"), "available");
+  try {
+    await invoke("downgrade_to_version", {version});
+    hideError();
+    deprecatedVersions = null;
+    deprecatedVisible = false;
+    await loadState();
+    if (state) await checkUpdate();
+  } catch (error) {
+    showError(error);
+  } finally {
+    downgradingVersion = null;
+    installingUpdate = false;
+    updateProgress = null;
+    renderProgress();
+    renderDeprecated();
+    renderUpdate();
+  }
+}
+
+function renderSafeMarkdown(markdown, target = byId("release-notes")) {
   target.replaceChildren();
+  if (!String(markdown || "").trim()) {
+    const empty = document.createElement("p");
+    empty.textContent = tr("noReleaseNotes");
+    target.append(empty);
+    return;
+  }
   let list = null;
   String(markdown || "").split(/\r?\n/).forEach(raw => {
     const line = raw.trim();
@@ -192,6 +473,14 @@ function renderSafeMarkdown(markdown) {
   });
 }
 
+function pickLocalizedNotes(source) {
+  if (!source) return "";
+  const localized = language === "ja"
+    ? source.release_notes_markdown_ja
+    : source.release_notes_markdown_en;
+  return localized || source.release_notes_markdown || "";
+}
+
 function canLaunch() {
   return Boolean(state?.installation_ready)
     && !state?.cached_policy_invalid
@@ -210,11 +499,7 @@ function updateBlocksLaunch() {
 }
 
 function localizedReleaseNotes() {
-  if (!update) return "";
-  const localized = language === "ja"
-    ? update.release_notes_markdown_ja
-    : update.release_notes_markdown_en;
-  return localized || update.release_notes_markdown || "";
+  return pickLocalizedNotes(update);
 }
 
 function renderAnnouncements() {
@@ -240,6 +525,65 @@ function renderAnnouncements() {
   });
 }
 
+function setBadge(element, kind, text) {
+  element.textContent = text;
+  element.dataset.kind = kind;
+}
+
+function renderStatusCards() {
+  if (!state) return;
+  const installed = Boolean(state.installation_ready);
+  const installedVersion = installed ? state.installed_version : tr("notInstalledVersion");
+  const bodyLine = byId("body-version-line");
+  const bodyBadge = byId("body-badge");
+
+  if (checking) {
+    bodyLine.textContent = installedVersion;
+    setBadge(bodyBadge, "neutral", tr("statusChecking"));
+  } else if (!update || update.status === "current") {
+    bodyLine.textContent = installedVersion;
+    setBadge(bodyBadge, installed ? "ok" : "warning", installed ? tr("statusUpToDate") : tr("statusSetupNeeded"));
+  } else {
+    bodyLine.textContent = installed
+      ? `${installedVersion} → ${update.available_version}`
+      : `→ ${update.available_version}`;
+    if (update.status === "revoked") {
+      setBadge(bodyBadge, "error", tr("statusRevoked"));
+    } else if (update.status === "launcher_too_old") {
+      setBadge(bodyBadge, "error", tr("statusLauncherTooOld"));
+    } else if (update.status === "install_required") {
+      setBadge(bodyBadge, "warning", tr("statusSetupNeeded"));
+    } else if (update.mandatory) {
+      setBadge(bodyBadge, "warning", tr("statusMandatory"));
+    } else {
+      setBadge(bodyBadge, "available", tr("statusUpdateAvailable"));
+    }
+  }
+
+  byId("launcher-version-line").textContent = state.launcher_version;
+  setBadge(byId("launcher-badge"), "ok", tr("statusUpToDate"));
+}
+
+function renderReleasePanel() {
+  const panel = byId("update-panel");
+  if (!update) {
+    panel.hidden = true;
+    return;
+  }
+  const current = update.status === "current";
+  panel.hidden = false;
+  byId("available-title").textContent = current
+    ? tr("currentRelease").replace("{version}", update.available_version)
+    : tr(update.status === "install_required" ? "installAvailable" : "available")
+      .replace("{version}", update.available_version);
+  const publishedAt = formatPublishedAt(update.available_published_at);
+  byId("available-published-at").textContent = publishedAt
+    ? tr("publishedAt").replace("{datetime}", publishedAt)
+    : "";
+  byId("update-actions").hidden = current;
+  renderSafeMarkdown(localizedReleaseNotes());
+}
+
 function renderUpdate() {
   if (!state) return;
   const installed = Boolean(state.installation_ready);
@@ -249,14 +593,10 @@ function renderUpdate() {
   byId("configure").disabled = !canLaunch();
   byId("check").disabled = checking || installingUpdate || launching;
   byId("launch-current").disabled = blocked || !installed || installingUpdate || launching;
-  const version = installed ? state.installed_version : tr("notInstalledVersion");
-  byId("version").textContent = tr("bodyVersion")
-    .replace("{version}", version)
-    .replace("{channel}", state.channel);
-  byId("launcher-version").textContent = tr("launcherVersion")
-    .replace("{version}", state.launcher_version);
-  byId("update-panel").hidden = !update || update.status === "current";
+  renderStatusCards();
+  renderReleasePanel();
   renderAnnouncements();
+  renderDeprecated();
   if (installingUpdate) {
     setStatus(tr(update?.status === "install_required" ? "installing" : "updating"), "available");
     return;
@@ -283,14 +623,7 @@ function renderUpdate() {
     return;
   }
   const installing = update.status === "install_required";
-  const title = installing ? tr("installAvailable") : tr("available");
-  byId("available-title").textContent = title.replace("{version}", update.available_version);
-  const publishedAt = formatPublishedAt(update.available_published_at);
-  byId("available-published-at").textContent = publishedAt
-    ? tr("publishedAt").replace("{datetime}", publishedAt)
-    : "";
   byId("update-launch").textContent = installing ? tr("installLaunch") : tr("updateLaunch");
-  renderSafeMarkdown(localizedReleaseNotes());
   byId("launch-current").disabled = blocked || !installed || installingUpdate || launching;
   byId("play").disabled = blocked || !installed || launching;
   byId("configure").disabled = blocked || !installed || launching;
@@ -443,6 +776,8 @@ byId("configure").addEventListener("click", () => launch(true));
 byId("check").addEventListener("click", checkUpdate);
 byId("update-launch").addEventListener("click", installAndLaunch);
 byId("launch-current").addEventListener("click", () => launch(false));
+byId("deprecated-toggle").addEventListener("click", toggleDeprecated);
+byId("plugin-toggle").addEventListener("click", togglePlugins);
 
 if (listen) {
   await listen("arena-update-progress", event => {

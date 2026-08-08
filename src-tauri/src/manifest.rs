@@ -67,6 +67,23 @@ pub struct ReleaseManifest {
     pub signature: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HistoryEntry {
+    pub version: String,
+    pub published_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReleaseHistory {
+    pub schema_version: u32,
+    pub channel: String,
+    pub platform: String,
+    pub versions: Vec<HistoryEntry>,
+    pub signature: String,
+}
+
+const MAX_HISTORY_VERSIONS: usize = 2000;
+
 #[derive(Debug, Error)]
 pub enum ManifestError {
     #[error("invalid manifest JSON: {0}")]
@@ -85,6 +102,10 @@ pub enum ManifestError {
     DuplicatePath(String),
     #[error("artifact hash mismatch: {0}")]
     HashMismatch(String),
+    #[error("history channel or platform does not match the request")]
+    HistoryTarget,
+    #[error("history does not list the requested version")]
+    HistoryVersionMissing,
     #[error("I/O error: {0}")]
     Io(#[from] io::Error),
 }
@@ -126,6 +147,18 @@ pub fn verify_manifest(
     }
     validate_localized_content(&manifest)?;
 
+    verify_canonical_signature(input, public_key_base64, &manifest.signature)?;
+    Ok(manifest)
+}
+
+/// Verifies an Ed25519 signature over the RFC 8785 canonical form of `input`
+/// with its `signature` field removed. Shared by manifests and the history
+/// index, which use the exact same signing scheme.
+fn verify_canonical_signature(
+    input: &str,
+    public_key_base64: &str,
+    signature_base64: &str,
+) -> Result<(), ManifestError> {
     let mut unsigned: Value = serde_json::from_str(input)?;
     unsigned
         .as_object_mut()
@@ -136,7 +169,7 @@ pub fn verify_manifest(
         .decode(public_key_base64)
         .map_err(|_| ManifestError::SignatureEncoding)?;
     let signature_bytes = STANDARD
-        .decode(&manifest.signature)
+        .decode(signature_base64)
         .map_err(|_| ManifestError::SignatureEncoding)?;
     let key_array: [u8; 32] = key_bytes
         .try_into()
@@ -148,7 +181,44 @@ pub fn verify_manifest(
     verifying_key
         .verify(&canonical, &signature)
         .map_err(|_| ManifestError::Signature)?;
-    Ok(manifest)
+    Ok(())
+}
+
+/// Verifies a signed `history.json` index for the given channel/platform and
+/// returns it. Every entry must have a non-empty version and published_at,
+/// versions must be unique (case-insensitive), and the list is capped to
+/// guard against a pathologically large response.
+pub fn verify_history(
+    input: &str,
+    public_key_base64: &str,
+    expected_channel: &str,
+    expected_platform: &str,
+) -> Result<ReleaseHistory, ManifestError> {
+    let history: ReleaseHistory = serde_json::from_str(input)?;
+    if history.schema_version != 1 {
+        return Err(ManifestError::Schema);
+    }
+    if !matches!(history.channel.as_str(), "stable" | "test")
+        || !matches!(history.platform.as_str(), "windows-x64" | "macos-arm64")
+        || history.versions.is_empty()
+        || history.versions.len() > MAX_HISTORY_VERSIONS
+    {
+        return Err(ManifestError::Schema);
+    }
+    if history.channel != expected_channel || history.platform != expected_platform {
+        return Err(ManifestError::HistoryTarget);
+    }
+    let mut seen = std::collections::HashSet::with_capacity(history.versions.len());
+    for entry in &history.versions {
+        if entry.version.trim().is_empty() || entry.published_at.trim().is_empty() {
+            return Err(ManifestError::Schema);
+        }
+        if !seen.insert(entry.version.to_ascii_lowercase()) {
+            return Err(ManifestError::Schema);
+        }
+    }
+    verify_canonical_signature(input, public_key_base64, &history.signature)?;
+    Ok(history)
 }
 
 fn valid_announcement_date(value: &str) -> bool {
@@ -422,5 +492,73 @@ mod tests {
         let key = "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=";
         let manifest = verify_manifest(input, key).unwrap();
         assert_eq!(manifest.version, "0.4.14");
+    }
+
+    fn signed_history(versions: &[(&str, &str)]) -> (String, String) {
+        let signing = SigningKey::from_bytes(&[7_u8; 32]);
+        let mut value = json!({
+            "schema_version": 1,
+            "channel": "test",
+            "platform": "windows-x64",
+            "versions": versions.iter().map(|(version, published_at)| json!({
+                "version": version,
+                "published_at": published_at,
+            })).collect::<Vec<_>>(),
+        });
+        let canonical = serde_jcs::to_vec(&value).unwrap();
+        let signature = signing.sign(&canonical);
+        value["signature"] = Value::String(STANDARD.encode(signature.to_bytes()));
+        (
+            serde_json::to_string(&value).unwrap(),
+            STANDARD.encode(signing.verifying_key().to_bytes()),
+        )
+    }
+
+    #[test]
+    fn verifies_canonical_history_and_rejects_tampering() {
+        let (input, key) = signed_history(&[
+            ("0.4.15", "2026-08-06T00:00:00Z"),
+            ("0.4.14", "2026-08-03T00:00:00Z"),
+        ]);
+        let history = verify_history(&input, &key, "test", "windows-x64").unwrap();
+        assert_eq!(history.versions.len(), 2);
+        assert_eq!(history.versions[0].version, "0.4.15");
+
+        let tampered = input.replace("0.4.14", "9.9.9");
+        assert!(matches!(
+            verify_history(&tampered, &key, "test", "windows-x64"),
+            Err(ManifestError::Signature)
+        ));
+    }
+
+    #[test]
+    fn history_rejects_wrong_target_and_duplicate_versions() {
+        let (input, key) = signed_history(&[("0.4.14", "2026-08-03T00:00:00Z")]);
+        assert!(matches!(
+            verify_history(&input, &key, "test", "macos-arm64"),
+            Err(ManifestError::HistoryTarget)
+        ));
+        assert!(matches!(
+            verify_history(&input, &key, "stable", "windows-x64"),
+            Err(ManifestError::HistoryTarget)
+        ));
+
+        let (duplicate_input, duplicate_key) = signed_history(&[
+            ("0.4.14", "2026-08-03T00:00:00Z"),
+            ("0.4.14", "2026-08-04T00:00:00Z"),
+        ]);
+        assert!(matches!(
+            verify_history(&duplicate_input, &duplicate_key, "test", "windows-x64"),
+            Err(ManifestError::Schema)
+        ));
+    }
+
+    #[test]
+    fn history_rejects_empty_version_list() {
+        let (input, key) = signed_history(&[]);
+        assert!(matches!(
+            verify_history(&input, &key, "test", "windows-x64"),
+            Err(ManifestError::Schema)
+        ));
     }
 }
