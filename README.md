@@ -44,6 +44,14 @@ Optional updates retain a launch-current action; mandatory or revoked versions
 do not. A client that has never downloaded the mandatory policy is still
 subject to the Arena service compatibility gate.
 
+Before launching, the launcher validates canonical Java, body-JAR, and root
+paths. Only at the Java process boundary it converts compatible Windows
+extended-length paths such as `\\?\C:\...` back to their ordinary form, so the
+JVM does not receive a path format it may reject. Each launch appends its mode,
+Java source, PID, stdout/stderr, and exit result to `arena-launch.log` in the
+portable root. The launcher stays open while Arena is running and shows a
+diagnostic with that log path when the game exits unsuccessfully or immediately.
+
 The signed manifest carries Japanese and English release notes plus up to 20
 newest-first announcements with an ISO date and title in both languages. The
 launcher switches this content with its `🌐 日本語` / `🌐 English` control and
