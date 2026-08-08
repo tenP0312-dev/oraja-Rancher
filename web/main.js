@@ -409,6 +409,7 @@ async function installAndLaunch() {
     files_done: 0,
     files_total: Array.isArray(update?.artifacts) ? update.artifacts.length : 0
   };
+  renderUpdate();
   renderProgress();
   setStatus(tr(update?.status === "install_required" ? "installing" : "updating"), "available");
   byId("update-launch").disabled = true;
