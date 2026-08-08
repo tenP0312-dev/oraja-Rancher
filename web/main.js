@@ -30,9 +30,7 @@ const dictionary = {
     policyInvalid: "保存された更新判定を検証できません。オンライン更新確認が必要です",
     updateUnconfigured: "このランチャーには更新先が設定されていません",
     switchLanguage: "英語に切り替え",
-    bodyVersion: "本体 {version} / {channel}",
     notInstalledVersion: "未インストール",
-    launcherVersion: "Launcher {version}",
     downloading: "本体をダウンロード中",
     extracting: "本体を展開・検証中",
     verifying: "ダウンロードしたファイルを検証中",
@@ -55,7 +53,19 @@ const dictionary = {
     downgradeConfirm: "本体を {version}（配信日時: {datetime}）にダウングレードします。Java、プラグイン、設定、スキン、リプレイ、スコアデータは変更されません。よろしいですか？",
     downgradeSuccess: "ダウングレードが完了しました",
     deprecatedKindTest: "(旧テストビルド)",
-    deprecatedKindStable: "(旧安定版)"
+    deprecatedKindStable: "(旧安定版)",
+    releaseNotesToggle: "リリースノートを見る",
+    currentRelease: "現在の本体 {version}",
+    noReleaseNotes: "この版のリリースノートはありません",
+    statusBody: "本体",
+    statusLauncher: "ランチャー",
+    statusChecking: "確認中",
+    statusUpToDate: "最新",
+    statusSetupNeeded: "セットアップ必要",
+    statusUpdateAvailable: "更新あり",
+    statusMandatory: "必須更新",
+    statusRevoked: "利用停止中",
+    statusLauncherTooOld: "ランチャー要更新"
   },
   en: {
     checking: "Checking for updates",
@@ -85,9 +95,7 @@ const dictionary = {
     policyInvalid: "The saved update policy is invalid. An online update check is required",
     updateUnconfigured: "This launcher has no update endpoint configured",
     switchLanguage: "Switch to Japanese",
-    bodyVersion: "Body {version} / {channel}",
     notInstalledVersion: "Not installed",
-    launcherVersion: "Launcher {version}",
     downloading: "Downloading game files",
     extracting: "Extracting and verifying game files",
     verifying: "Verifying downloaded files",
@@ -110,7 +118,19 @@ const dictionary = {
     downgradeConfirm: "Downgrade the game to {version} (published {datetime}). Java, the plugin, settings, skins, replays, and score data will not be touched. Continue?",
     downgradeSuccess: "Downgrade complete",
     deprecatedKindTest: "(older test build)",
-    deprecatedKindStable: "(older stable build)"
+    deprecatedKindStable: "(older stable build)",
+    releaseNotesToggle: "View release notes",
+    currentRelease: "Installed body {version}",
+    noReleaseNotes: "No release notes are available for this version",
+    statusBody: "Body",
+    statusLauncher: "Launcher",
+    statusChecking: "Checking",
+    statusUpToDate: "Up to date",
+    statusSetupNeeded: "Setup needed",
+    statusUpdateAvailable: "Update available",
+    statusMandatory: "Required update",
+    statusRevoked: "Revoked",
+    statusLauncherTooOld: "Launcher needs updating"
   }
 };
 
@@ -127,6 +147,7 @@ let deprecatedVersions = null;
 let deprecatedVisible = false;
 let deprecatedLoading = false;
 let downgradingVersion = null;
+const deprecatedNotesCache = {};
 const byId = id => document.getElementById(id);
 const tr = key => dictionary[language][key];
 
@@ -221,6 +242,8 @@ function renderDeprecated() {
   empty.hidden = versions.length > 0;
   versions.forEach(entry => {
     const item = document.createElement("li");
+    const row = document.createElement("div");
+    row.className = "deprecated-row";
     const label = document.createElement("span");
     const publishedAt = formatPublishedAt(entry.published_at);
     const versionLabel = `${entry.version} ${deprecatedVersionKind()}`;
@@ -231,9 +254,37 @@ function renderDeprecated() {
     button.textContent = downgradingVersion === entry.version ? tr("applying") : tr("downgradeButton");
     button.disabled = Boolean(downgradingVersion) || installingUpdate || checking;
     button.addEventListener("click", () => confirmAndDowngrade(entry));
-    item.append(label, button);
+    row.append(label, button);
+
+    const details = document.createElement("details");
+    const summary = document.createElement("summary");
+    summary.textContent = tr("releaseNotesToggle");
+    const notes = document.createElement("div");
+    notes.className = "notes";
+    details.append(summary, notes);
+    details.addEventListener("toggle", () => {
+      if (details.open) loadDeprecatedNotes(entry.version, notes);
+    });
+
+    item.append(row, details);
     list.append(item);
   });
+}
+
+async function loadDeprecatedNotes(version, container) {
+  const cached = deprecatedNotesCache[version];
+  if (cached) {
+    renderSafeMarkdown(pickLocalizedNotes(cached), container);
+    return;
+  }
+  container.textContent = tr("deprecatedLoading");
+  try {
+    const notes = await invoke("fetch_deprecated_version_notes", {version});
+    deprecatedNotesCache[version] = notes;
+    renderSafeMarkdown(pickLocalizedNotes(notes), container);
+  } catch (error) {
+    container.textContent = tr("deprecatedLoadError");
+  }
 }
 
 async function toggleDeprecated() {
@@ -293,9 +344,14 @@ async function downgrade(version) {
   }
 }
 
-function renderSafeMarkdown(markdown) {
-  const target = byId("release-notes");
+function renderSafeMarkdown(markdown, target = byId("release-notes")) {
   target.replaceChildren();
+  if (!String(markdown || "").trim()) {
+    const empty = document.createElement("p");
+    empty.textContent = tr("noReleaseNotes");
+    target.append(empty);
+    return;
+  }
   let list = null;
   String(markdown || "").split(/\r?\n/).forEach(raw => {
     const line = raw.trim();
@@ -319,6 +375,14 @@ function renderSafeMarkdown(markdown) {
   });
 }
 
+function pickLocalizedNotes(source) {
+  if (!source) return "";
+  const localized = language === "ja"
+    ? source.release_notes_markdown_ja
+    : source.release_notes_markdown_en;
+  return localized || source.release_notes_markdown || "";
+}
+
 function canLaunch() {
   return Boolean(state?.installation_ready)
     && !state?.cached_policy_invalid
@@ -337,11 +401,7 @@ function updateBlocksLaunch() {
 }
 
 function localizedReleaseNotes() {
-  if (!update) return "";
-  const localized = language === "ja"
-    ? update.release_notes_markdown_ja
-    : update.release_notes_markdown_en;
-  return localized || update.release_notes_markdown || "";
+  return pickLocalizedNotes(update);
 }
 
 function renderAnnouncements() {
@@ -367,6 +427,65 @@ function renderAnnouncements() {
   });
 }
 
+function setBadge(element, kind, text) {
+  element.textContent = text;
+  element.dataset.kind = kind;
+}
+
+function renderStatusCards() {
+  if (!state) return;
+  const installed = Boolean(state.installation_ready);
+  const installedVersion = installed ? state.installed_version : tr("notInstalledVersion");
+  const bodyLine = byId("body-version-line");
+  const bodyBadge = byId("body-badge");
+
+  if (checking) {
+    bodyLine.textContent = installedVersion;
+    setBadge(bodyBadge, "neutral", tr("statusChecking"));
+  } else if (!update || update.status === "current") {
+    bodyLine.textContent = installedVersion;
+    setBadge(bodyBadge, installed ? "ok" : "warning", installed ? tr("statusUpToDate") : tr("statusSetupNeeded"));
+  } else {
+    bodyLine.textContent = installed
+      ? `${installedVersion} → ${update.available_version}`
+      : `→ ${update.available_version}`;
+    if (update.status === "revoked") {
+      setBadge(bodyBadge, "error", tr("statusRevoked"));
+    } else if (update.status === "launcher_too_old") {
+      setBadge(bodyBadge, "error", tr("statusLauncherTooOld"));
+    } else if (update.status === "install_required") {
+      setBadge(bodyBadge, "warning", tr("statusSetupNeeded"));
+    } else if (update.mandatory) {
+      setBadge(bodyBadge, "warning", tr("statusMandatory"));
+    } else {
+      setBadge(bodyBadge, "available", tr("statusUpdateAvailable"));
+    }
+  }
+
+  byId("launcher-version-line").textContent = state.launcher_version;
+  setBadge(byId("launcher-badge"), "ok", tr("statusUpToDate"));
+}
+
+function renderReleasePanel() {
+  const panel = byId("update-panel");
+  if (!update) {
+    panel.hidden = true;
+    return;
+  }
+  const current = update.status === "current";
+  panel.hidden = false;
+  byId("available-title").textContent = current
+    ? tr("currentRelease").replace("{version}", update.available_version)
+    : tr(update.status === "install_required" ? "installAvailable" : "available")
+      .replace("{version}", update.available_version);
+  const publishedAt = formatPublishedAt(update.available_published_at);
+  byId("available-published-at").textContent = publishedAt
+    ? tr("publishedAt").replace("{datetime}", publishedAt)
+    : "";
+  byId("update-actions").hidden = current;
+  renderSafeMarkdown(localizedReleaseNotes());
+}
+
 function renderUpdate() {
   if (!state) return;
   const installed = Boolean(state.installation_ready);
@@ -376,13 +495,8 @@ function renderUpdate() {
   byId("configure").disabled = !canLaunch();
   byId("check").disabled = checking || installingUpdate || launching;
   byId("launch-current").disabled = blocked || !installed || installingUpdate || launching;
-  const version = installed ? state.installed_version : tr("notInstalledVersion");
-  byId("version").textContent = tr("bodyVersion")
-    .replace("{version}", version)
-    .replace("{channel}", state.channel);
-  byId("launcher-version").textContent = tr("launcherVersion")
-    .replace("{version}", state.launcher_version);
-  byId("update-panel").hidden = !update || update.status === "current";
+  renderStatusCards();
+  renderReleasePanel();
   renderAnnouncements();
   renderDeprecated();
   if (installingUpdate) {
@@ -411,14 +525,7 @@ function renderUpdate() {
     return;
   }
   const installing = update.status === "install_required";
-  const title = installing ? tr("installAvailable") : tr("available");
-  byId("available-title").textContent = title.replace("{version}", update.available_version);
-  const publishedAt = formatPublishedAt(update.available_published_at);
-  byId("available-published-at").textContent = publishedAt
-    ? tr("publishedAt").replace("{datetime}", publishedAt)
-    : "";
   byId("update-launch").textContent = installing ? tr("installLaunch") : tr("updateLaunch");
-  renderSafeMarkdown(localizedReleaseNotes());
   byId("launch-current").disabled = blocked || !installed || installingUpdate || launching;
   byId("play").disabled = blocked || !installed || launching;
   byId("configure").disabled = blocked || !installed || launching;

@@ -158,6 +158,14 @@ async fn list_deprecated_versions() -> Result<Vec<manifest::HistoryEntry>, Strin
 }
 
 #[tauri::command]
+async fn fetch_deprecated_version_notes(version: String) -> Result<update::VersionNotes, String> {
+    tauri::async_runtime::spawn_blocking(move || update::fetch_version_notes(&version))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn downgrade_to_version(app: AppHandle, version: String) -> Result<String, String> {
     let root = install::launcher_install_root().map_err(|error| error.to_string())?;
     let launcher_version = env!("CARGO_PKG_VERSION").to_string();
@@ -224,6 +232,7 @@ pub fn run() {
             check_online_update,
             install_online_update,
             list_deprecated_versions,
+            fetch_deprecated_version_notes,
             downgrade_to_version,
             launch_game
         ])
