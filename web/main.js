@@ -42,6 +42,7 @@ const dictionary = {
     launching: "Arenaを起動しています",
     launchFailed: "Arenaが異常終了しました",
     launchEndedEarly: "Arenaがすぐに終了しました",
+    launchDiagnostic: "Arenaの起動診断を確認してください",
     exitCode: "終了コード",
     exitCodeUnavailable: "取得できません",
     launchLog: "診断ログ"
@@ -86,6 +87,7 @@ const dictionary = {
     launching: "Launching Arena",
     launchFailed: "Arena exited with an error",
     launchEndedEarly: "Arena exited shortly after launch",
+    launchDiagnostic: "Check the Arena launch diagnostic",
     exitCode: "Exit code",
     exitCodeUnavailable: "Unavailable",
     launchLog: "Diagnostic log"
@@ -384,9 +386,12 @@ function launchExitDetails(result) {
 
 function reportLaunchExit(result) {
   if (!result) return;
-  if (!result?.success || result?.short_lived) {
-    const failed = !result?.success;
-    setStatus(tr(failed ? "launchFailed" : "launchEndedEarly"), failed ? "error" : "warning");
+  if (!result.success || result.short_lived || result.diagnostic) {
+    const failed = !result.success;
+    const status = failed
+      ? "launchFailed"
+      : (result.short_lived ? "launchEndedEarly" : "launchDiagnostic");
+    setStatus(tr(status), failed ? "error" : "warning");
     showError(launchExitDetails(result));
   }
 }
