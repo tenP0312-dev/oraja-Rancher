@@ -168,6 +168,7 @@ pub fn installed_version(root: &Path) -> String {
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| {
             option_env!("BMSIR_ARENA_CLIENT_VERSION")
+                .filter(|value| !value.trim().is_empty())
                 .unwrap_or("0.4.14")
                 .to_string()
         })

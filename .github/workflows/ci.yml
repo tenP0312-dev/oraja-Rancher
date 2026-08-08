@@ -140,6 +140,9 @@ jobs:
           if (-not $text.Contains("org.bms-ir.arena.launcher.test")) {
             throw "Internal test launcher is missing its isolated application identifier"
           }
+          if (-not $text.Contains($env:BMSIR_ARENA_CLIENT_VERSION)) {
+            throw "Internal test launcher is missing its selected body version"
+          }
           Copy-Item $source "../BMS-IR Arena Test.exe"
 
       - name: Build configured internal macOS test launcher
@@ -157,13 +160,16 @@ jobs:
           cargo tauri build --bundles app --no-sign --ci --config tauri.test.conf.json
           app="target/release/bundle/macos/BMS-IR Arena Test.app"
           binary="$app/Contents/MacOS/bmsir-arena-launcher"
-          python3 - "$binary" <<'PY'
+          python3 - "$binary" "$BMSIR_ARENA_CLIENT_VERSION" <<'PY'
           from pathlib import Path
           import sys
 
           data = Path(sys.argv[1]).read_bytes()
+          selected_body_version = sys.argv[2].encode()
           if b"BMSIR_ARENA_UPDATE_CONFIGURED_V1" not in data:
               raise SystemExit("Configured macOS launcher is missing its update marker")
+          if selected_body_version not in data:
+              raise SystemExit("Configured macOS launcher is missing its selected body version")
           PY
           bundle_name="$(plutil -extract CFBundleName raw -o - "$app/Contents/Info.plist")"
           if test "$bundle_name" != "BMS-IR Arena Test"; then
