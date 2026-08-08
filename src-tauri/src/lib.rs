@@ -10,6 +10,7 @@ use std::path::Path;
 use tauri::{AppHandle, Emitter};
 
 const UPDATE_PROGRESS_EVENT: &str = "arena-update-progress";
+const LAUNCH_EXIT_EVENT: &str = "arena-launch-exit";
 
 #[derive(Debug, Serialize)]
 struct LauncherState {
@@ -61,7 +62,10 @@ async fn check_online_update() -> Result<update::UpdateInfo, String> {
 }
 
 #[tauri::command]
-async fn install_online_update(app: AppHandle, launch_after: bool) -> Result<(), String> {
+async fn install_online_update(
+    app: AppHandle,
+    launch_after: bool,
+) -> Result<Option<install::LaunchInfo>, String> {
     let root = install::launcher_install_root().map_err(|error| error.to_string())?;
     let installation = install::inspect(&root).map_err(|error| error.to_string())?;
     let installation_ready = install::is_ready(&installation);
@@ -104,7 +108,7 @@ async fn install_online_update(app: AppHandle, launch_after: bool) -> Result<(),
             ),
         );
         app.exit(0);
-        return Ok(());
+        return Ok(None);
     }
     if prepared.bootstrap_install {
         return Err(
@@ -135,25 +139,28 @@ async fn install_online_update(app: AppHandle, launch_after: bool) -> Result<(),
     }
     install::write_version_marker(&root, &prepared.manifest.version)
         .map_err(|error| error.to_string())?;
-    if launch_after {
-        launch_detected(&root, false)?;
-        app.exit(0);
-    }
-    Ok(())
+    let launch = if launch_after {
+        Some(launch_detected(&app, &root, false)?)
+    } else {
+        None
+    };
+    Ok(launch)
 }
 
 #[tauri::command]
-fn launch_game(app: AppHandle, configuration: bool) -> Result<(), String> {
+fn launch_game(app: AppHandle, configuration: bool) -> Result<install::LaunchInfo, String> {
     let root = install::launcher_install_root().map_err(|error| error.to_string())?;
     let installation = install::inspect(&root).map_err(|error| error.to_string())?;
     update::enforce_cached_launch_policy(&root, install::is_ready(&installation))
         .map_err(|error| error.to_string())?;
-    launch_detected(&root, configuration)?;
-    app.exit(0);
-    Ok(())
+    launch_detected(&app, &root, configuration)
 }
 
-fn launch_detected(root: &Path, configuration: bool) -> Result<(), String> {
+fn launch_detected(
+    app: &AppHandle,
+    root: &Path,
+    configuration: bool,
+) -> Result<install::LaunchInfo, String> {
     let installation = install::inspect(root).map_err(|error| error.to_string())?;
     let java = installation
         .java_runtime
@@ -163,8 +170,19 @@ fn launch_detected(root: &Path, configuration: bool) -> Result<(), String> {
         .game_jar
         .as_deref()
         .ok_or_else(|| "Arena oraja JAR was not found".to_string())?;
-    install::launch(root, Path::new(java), Path::new(game), configuration)
-        .map_err(|error| error.to_string())
+    let java_source = installation.java_source.as_deref().unwrap_or("unknown");
+    let exit_app = app.clone();
+    install::launch_with_source(
+        root,
+        Path::new(java),
+        java_source,
+        Path::new(game),
+        configuration,
+        move |outcome| {
+            let _ = exit_app.emit(LAUNCH_EXIT_EVENT, outcome);
+        },
+    )
+    .map_err(|error| error.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

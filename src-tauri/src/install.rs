@@ -1,12 +1,13 @@
 use crate::manifest::{verify_file, ManifestError, ReleaseManifest};
 use serde::Serialize;
 use std::ffi::OsString;
-use std::fs;
-use std::io;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
 const MINIMUM_JAVA_MAJOR: u32 = 21;
@@ -18,6 +19,8 @@ const UPDATE_HELPER: &str = if cfg!(windows) {
 } else {
     ".bmsir-launcher-update-helper"
 };
+const LAUNCH_LOG_FILE: &str = "arena-launch.log";
+const SHORT_LIVED_LAUNCH_SECONDS: u64 = 5;
 
 #[derive(Debug, Error)]
 pub enum InstallError {
@@ -35,6 +38,22 @@ pub enum InstallError {
     UnsafeFilesystemPath,
     #[error("the signed update does not contain this launcher executable")]
     LauncherArtifactMissing,
+    #[error("could not write the Arena launch log at {path}: {source}")]
+    LaunchLog {
+        path: String,
+        #[source]
+        source: io::Error,
+    },
+    #[error("could not start Arena oraja (mode={mode}, java={java}, cwd={cwd}): {source}")]
+    LaunchProcess {
+        mode: &'static str,
+        java: String,
+        cwd: String,
+        #[source]
+        source: io::Error,
+    },
+    #[error("Arena oraja launch monitor ended before reporting its result")]
+    LaunchMonitorDisconnected,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -45,6 +64,24 @@ pub struct InstallationInfo {
     pub java_source: Option<String>,
     pub java_version: Option<u32>,
     pub plugin_jars: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LaunchInfo {
+    pub pid: u32,
+    pub log_path: String,
+    pub diagnostic: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LaunchExit {
+    pub pid: u32,
+    pub exit_code: Option<i32>,
+    pub success: bool,
+    pub short_lived: bool,
+    pub elapsed_millis: u64,
+    pub log_path: String,
+    pub diagnostic: Option<String>,
 }
 
 pub fn is_ready(installation: &InstallationInfo) -> bool {
@@ -601,7 +638,8 @@ pub fn run_self_update_helper(
                         .as_deref()
                         .map(Path::new)
                         .ok_or(InstallError::InvalidRoot)?;
-                    launch(root, java, game, false)?;
+                    let java_source = installation.java_source.as_deref().unwrap_or("unknown");
+                    let _ = launch_and_wait(root, java, java_source, game, false)?;
                 } else {
                     Command::new(root.join(launcher_path)).spawn()?;
                 }
@@ -682,12 +720,87 @@ fn game_arguments(root: &Path, game_jar: &Path, configuration: bool) -> Vec<OsSt
     arguments
 }
 
-pub fn launch(
+fn launch_mode(configuration: bool) -> &'static str {
+    if configuration {
+        "configuration"
+    } else {
+        "play"
+    }
+}
+
+/// Converts validated canonical paths only at the external Java process
+/// boundary. On Windows this removes a compatible `\\\\?\\` prefix that Java may
+/// not accept, while retaining it when stripping the prefix would be unsafe.
+fn process_boundary_path(path: &Path) -> PathBuf {
+    dunce::simplified(path).to_path_buf()
+}
+
+fn display_path(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('\r', "\\r")
+        .replace('\n', "\\n")
+}
+
+fn launch_timestamp_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+}
+
+fn open_launch_log(log_path: &Path) -> Result<File, InstallError> {
+    match log_path.symlink_metadata() {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            return Err(InstallError::UnsafeFilesystemPath);
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(source) => {
+            return Err(InstallError::LaunchLog {
+                path: display_path(log_path),
+                source,
+            });
+        }
+    }
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+        .map_err(|source| InstallError::LaunchLog {
+            path: display_path(log_path),
+            source,
+        })
+}
+
+fn append_launch_record(log_path: &Path, record: &str) -> Result<(), InstallError> {
+    let mut log = open_launch_log(log_path)?;
+    writeln!(log, "{record}").map_err(|source| InstallError::LaunchLog {
+        path: display_path(log_path),
+        source,
+    })?;
+    log.flush().map_err(|source| InstallError::LaunchLog {
+        path: display_path(log_path),
+        source,
+    })
+}
+
+fn elapsed_millis(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+pub fn launch_with_source<F>(
     root: &Path,
     java: &Path,
+    java_source: &str,
     game_jar: &Path,
     configuration: bool,
-) -> Result<(), InstallError> {
+    on_exit: F,
+) -> Result<LaunchInfo, InstallError>
+where
+    F: FnOnce(LaunchExit) + Send + 'static,
+{
+    // Keep canonical paths for all validation. Do not feed the simplified
+    // Windows representation back into safety checks.
     let root = root.canonicalize()?;
     let java = java.canonicalize()?;
     let game_jar = game_jar.canonicalize()?;
@@ -695,12 +808,154 @@ pub fn launch(
         return Err(InstallError::InvalidRoot);
     }
     inspect_java(&java)?;
-    let mut command = Command::new(java);
-    command
-        .current_dir(&root)
-        .args(game_arguments(&root, &game_jar, configuration));
-    command.spawn()?;
-    Ok(())
+
+    let launch_root = process_boundary_path(&root);
+    let launch_java = process_boundary_path(&java);
+    let launch_game_jar = process_boundary_path(&game_jar);
+    let arguments = game_arguments(&launch_root, &launch_game_jar, configuration);
+    let mode = launch_mode(configuration);
+    let log_path = root.join(LAUNCH_LOG_FILE);
+    let mut log = open_launch_log(&log_path)?;
+    let command_record = format!(
+        "ts={} event=launch_requested mode={} java_source={} java={:?} cwd={:?} jar={:?} args={:?}",
+        launch_timestamp_millis(),
+        mode,
+        java_source,
+        display_path(&launch_java),
+        display_path(&launch_root),
+        display_path(&launch_game_jar),
+        arguments
+    );
+    writeln!(log, "{command_record}").map_err(|source| InstallError::LaunchLog {
+        path: display_path(&log_path),
+        source,
+    })?;
+    log.flush().map_err(|source| InstallError::LaunchLog {
+        path: display_path(&log_path),
+        source,
+    })?;
+
+    let stdout = log.try_clone().map_err(|source| InstallError::LaunchLog {
+        path: display_path(&log_path),
+        source,
+    })?;
+    let mut command = Command::new(&launch_java);
+    command.current_dir(&launch_root);
+    for argument in &arguments {
+        command.arg(argument);
+    }
+    command.stdout(Stdio::from(stdout)).stderr(Stdio::from(log));
+
+    let started = Instant::now();
+    let mut child = command.spawn().map_err(|source| {
+        let _ = append_launch_record(
+            &log_path,
+            &format!(
+                "ts={} event=spawn_failed mode={} error={:?}",
+                launch_timestamp_millis(),
+                mode,
+                source
+            ),
+        );
+        InstallError::LaunchProcess {
+            mode,
+            java: display_path(&launch_java),
+            cwd: display_path(&launch_root),
+            source,
+        }
+    })?;
+    let pid = child.id();
+    let spawn_diagnostic = append_launch_record(
+        &log_path,
+        &format!(
+            "ts={} event=spawned mode={} pid={}",
+            launch_timestamp_millis(),
+            mode,
+            pid
+        ),
+    )
+    .err()
+    .map(|error| error.to_string());
+
+    let log_path_text = display_path(&log_path);
+    let monitor_log_path = log_path.clone();
+    let monitor_diagnostic = spawn_diagnostic.clone();
+    thread::spawn(move || {
+        let (exit_code, success, mut diagnostic, wait_failed) = match child.wait() {
+            Ok(status) => (status.code(), status.success(), None, false),
+            Err(error) => (
+                None,
+                false,
+                Some(format!("process wait failed: {error}")),
+                true,
+            ),
+        };
+        if let Some(initial) = monitor_diagnostic {
+            diagnostic = Some(match diagnostic {
+                Some(existing) => format!("{existing}; {initial}"),
+                None => initial,
+            });
+        }
+        let elapsed_millis = elapsed_millis(started);
+        let short_lived = elapsed_millis < SHORT_LIVED_LAUNCH_SECONDS * 1_000;
+        let event = if wait_failed { "wait_failed" } else { "exited" };
+        if let Err(error) = append_launch_record(
+            &monitor_log_path,
+            &format!(
+                "ts={} event={} pid={} exit_code={:?} success={} short_lived={} elapsed_millis={}",
+                launch_timestamp_millis(),
+                event,
+                pid,
+                exit_code,
+                success,
+                short_lived,
+                elapsed_millis
+            ),
+        ) {
+            let write_error = error.to_string();
+            diagnostic = Some(match diagnostic {
+                Some(existing) => format!("{existing}; {write_error}"),
+                None => write_error,
+            });
+        }
+        on_exit(LaunchExit {
+            pid,
+            exit_code,
+            success,
+            short_lived,
+            elapsed_millis,
+            log_path: log_path_text,
+            diagnostic,
+        });
+    });
+    Ok(LaunchInfo {
+        pid,
+        log_path: display_path(&log_path),
+        diagnostic: spawn_diagnostic,
+    })
+}
+
+pub fn launch_and_wait(
+    root: &Path,
+    java: &Path,
+    java_source: &str,
+    game_jar: &Path,
+    configuration: bool,
+) -> Result<LaunchExit, InstallError> {
+    let (sender, receiver) = mpsc::sync_channel(1);
+    launch_with_source(
+        root,
+        java,
+        java_source,
+        game_jar,
+        configuration,
+        move |outcome| {
+            let _ = sender.send(outcome);
+        },
+    )?;
+    receiver
+        .recv()
+        .map_err(|_| InstallError::LaunchMonitorDisconnected)
 }
 
 #[cfg(test)]
@@ -944,6 +1199,122 @@ mod tests {
         );
         assert_eq!(arguments[4], CANONICAL_GAME_JAR);
         assert_eq!(arguments[5], "-s");
+    }
+
+    #[test]
+    fn process_boundary_keeps_an_ordinary_path() {
+        let path = Path::new("arena root/Arena-oraja.jar");
+        assert_eq!(process_boundary_path(path), path);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn process_boundary_strips_a_compatible_extended_windows_path() {
+        assert_eq!(
+            process_boundary_path(Path::new(r"\\?\C:\Arena oraja\Arena-oraja.jar")),
+            Path::new(r"C:\Arena oraja\Arena-oraja.jar")
+        );
+    }
+
+    #[cfg(unix)]
+    fn write_fake_java(root: &Path, exit_code: i32) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let java = root.join("runtime/bin/java");
+        fs::create_dir_all(java.parent().unwrap()).unwrap();
+        fs::write(
+            &java,
+            format!(
+                r#"#!/bin/sh
+if [ "$1" = "-version" ]; then
+  printf '%s\n' 'openjdk version "21.0.1"' >&2
+  exit 0
+fi
+printf 'cwd=%s\n' "$PWD" > "$PWD/launch-capture.txt"
+for argument in "$@"; do
+  printf 'arg=%s\n' "$argument" >> "$PWD/launch-capture.txt"
+done
+printf 'fake stdout\n'
+printf 'fake stderr\n' >&2
+exit {exit_code}
+"#
+            ),
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&java).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&java, permissions).unwrap();
+        java
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn launch_records_arguments_output_and_exit_result_without_blocking() {
+        use std::sync::mpsc;
+
+        let root = tempfile::tempdir().unwrap();
+        let java = write_fake_java(root.path(), 0);
+        let game = root.path().join(CANONICAL_GAME_JAR);
+        fs::write(&game, b"not a real jar").unwrap();
+        let (sender, receiver) = mpsc::channel();
+
+        let info = launch_with_source(
+            root.path(),
+            &java,
+            "bundled",
+            &game,
+            false,
+            move |outcome| sender.send(outcome).unwrap(),
+        )
+        .unwrap();
+        let outcome = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+
+        assert_eq!(outcome.pid, info.pid);
+        assert!(outcome.success);
+        assert!(outcome.short_lived);
+        let canonical_root = root.path().canonicalize().unwrap();
+        let canonical_game = game.canonicalize().unwrap();
+        let capture = fs::read_to_string(root.path().join("launch-capture.txt")).unwrap();
+        assert!(capture.contains(&format!("cwd={}", canonical_root.display())));
+        assert!(capture.contains(&format!(
+            "arg=-DcustomIRDirectory={}",
+            canonical_root.join("ir").display()
+        )));
+        assert!(capture.contains(&format!("arg={}", canonical_game.display())));
+        assert!(capture.contains("arg=-s"));
+
+        let log = fs::read_to_string(&info.log_path).unwrap();
+        assert!(log.contains("event=launch_requested mode=play java_source=bundled"));
+        assert!(log.contains("event=spawned mode=play"));
+        assert!(log.contains("fake stdout"));
+        assert!(log.contains("fake stderr"));
+        assert!(log.contains("event=exited"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn launch_reports_a_nonzero_child_exit() {
+        use std::sync::mpsc;
+
+        let root = tempfile::tempdir().unwrap();
+        let java = write_fake_java(root.path(), 23);
+        let game = root.path().join(CANONICAL_GAME_JAR);
+        fs::write(&game, b"not a real jar").unwrap();
+        let (sender, receiver) = mpsc::channel();
+
+        let info = launch_with_source(root.path(), &java, "bundled", &game, true, move |outcome| {
+            sender.send(outcome).unwrap()
+        })
+        .unwrap();
+        let outcome = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+
+        assert_eq!(outcome.pid, info.pid);
+        assert_eq!(outcome.exit_code, Some(23));
+        assert!(!outcome.success);
+        assert!(outcome.short_lived);
+        let log = fs::read_to_string(&info.log_path).unwrap();
+        assert!(log.contains("event=launch_requested mode=configuration"));
+        assert!(log.contains("exit_code=Some(23) success=false"));
     }
 
     #[test]

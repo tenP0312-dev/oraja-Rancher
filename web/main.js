@@ -38,7 +38,13 @@ const dictionary = {
     verifying: "ダウンロードしたファイルを検証中",
     applying: "更新を適用中",
     restarting: "新しいランチャーを起動中",
-    progressFiles: "{done} / {total} ファイル"
+    progressFiles: "{done} / {total} ファイル",
+    launching: "Arenaを起動しています",
+    launchFailed: "Arenaが異常終了しました",
+    launchEndedEarly: "Arenaがすぐに終了しました",
+    exitCode: "終了コード",
+    exitCodeUnavailable: "取得できません",
+    launchLog: "診断ログ"
   },
   en: {
     checking: "Checking for updates",
@@ -76,7 +82,13 @@ const dictionary = {
     verifying: "Verifying downloaded files",
     applying: "Applying update",
     restarting: "Starting the updated launcher",
-    progressFiles: "{done} / {total} files"
+    progressFiles: "{done} / {total} files",
+    launching: "Launching Arena",
+    launchFailed: "Arena exited with an error",
+    launchEndedEarly: "Arena exited shortly after launch",
+    exitCode: "Exit code",
+    exitCodeUnavailable: "Unavailable",
+    launchLog: "Diagnostic log"
   }
 };
 
@@ -87,6 +99,8 @@ let checking = true;
 let updateUnavailable = false;
 let installingUpdate = false;
 let updateProgress = null;
+let launching = false;
+let latestLaunchExit = null;
 const byId = id => document.getElementById(id);
 const tr = key => dictionary[language][key];
 
@@ -180,6 +194,8 @@ function canLaunch() {
   return Boolean(state?.installation_ready)
     && !state?.cached_policy_invalid
     && !checking
+    && !installingUpdate
+    && !launching
     && !updateBlocksLaunch();
 }
 
@@ -229,7 +245,8 @@ function renderUpdate() {
   byId("installation-status").textContent = installed ? tr("ready") : tr("notInstalled");
   byId("play").disabled = !canLaunch();
   byId("configure").disabled = !canLaunch();
-  byId("check").disabled = checking;
+  byId("check").disabled = checking || installingUpdate || launching;
+  byId("launch-current").disabled = blocked || !installed || installingUpdate || launching;
   const version = installed ? state.installed_version : tr("notInstalledVersion");
   byId("version").textContent = tr("bodyVersion")
     .replace("{version}", version)
@@ -238,6 +255,14 @@ function renderUpdate() {
     .replace("{version}", state.launcher_version);
   byId("update-panel").hidden = !update || update.status === "current";
   renderAnnouncements();
+  if (installingUpdate) {
+    setStatus(tr(update?.status === "install_required" ? "installing" : "updating"), "available");
+    return;
+  }
+  if (launching) {
+    setStatus(tr("launching"), "neutral");
+    return;
+  }
   if (checking) {
     setStatus(tr("checking"), "neutral");
     return;
@@ -264,9 +289,9 @@ function renderUpdate() {
     : "";
   byId("update-launch").textContent = installing ? tr("installLaunch") : tr("updateLaunch");
   renderSafeMarkdown(localizedReleaseNotes());
-  byId("launch-current").disabled = blocked || !installed;
-  byId("play").disabled = blocked || !installed;
-  byId("configure").disabled = blocked || !installed;
+  byId("launch-current").disabled = blocked || !installed || installingUpdate || launching;
+  byId("play").disabled = blocked || !installed || launching;
+  byId("configure").disabled = blocked || !installed || launching;
   if (update.status === "revoked") {
     setStatus(tr("revoked"), "error");
   } else if (update.status === "launcher_too_old") {
@@ -332,15 +357,44 @@ function hideError() {
 }
 
 async function launch(configuration = false) {
+  if (launching) return;
+  launching = true;
+  latestLaunchExit = null;
+  renderUpdate();
+  hideError();
   try {
-    await invoke("launch_game", {configuration});
+    const result = await invoke("launch_game", {configuration});
+    if (result?.diagnostic) showError(result.diagnostic);
   } catch (error) {
+    launching = false;
+    renderUpdate();
     showError(error);
+  }
+}
+
+function launchExitDetails(result) {
+  const code = result?.exit_code == null ? tr("exitCodeUnavailable") : result.exit_code;
+  const detail = [
+    `${tr("exitCode")}: ${code}`,
+    result?.log_path ? `${tr("launchLog")}: ${result.log_path}` : ""
+  ];
+  if (result?.diagnostic) detail.push(String(result.diagnostic));
+  return detail.filter(Boolean).join("\n");
+}
+
+function reportLaunchExit(result) {
+  if (!result) return;
+  if (!result?.success || result?.short_lived) {
+    const failed = !result?.success;
+    setStatus(tr(failed ? "launchFailed" : "launchEndedEarly"), failed ? "error" : "warning");
+    showError(launchExitDetails(result));
   }
 }
 
 async function installAndLaunch() {
   installingUpdate = true;
+  launching = true;
+  latestLaunchExit = null;
   updateProgress = {
     phase: "downloading",
     bytes_done: 0,
@@ -354,9 +408,17 @@ async function installAndLaunch() {
   setStatus(tr(update?.status === "install_required" ? "installing" : "updating"), "available");
   byId("update-launch").disabled = true;
   try {
-    await invoke("install_online_update", {launchAfter: true});
+    const result = await invoke("install_online_update", {launchAfter: true});
+    await loadState();
+    installingUpdate = false;
+    updateProgress = null;
+    renderProgress();
+    renderUpdate();
+    if (result?.diagnostic) showError(result.diagnostic);
+    reportLaunchExit(latestLaunchExit);
   } catch (error) {
     installingUpdate = false;
+    launching = false;
     updateProgress = null;
     renderProgress();
     byId("update-launch").disabled = false;
@@ -381,6 +443,13 @@ if (listen) {
     if (!installingUpdate) return;
     updateProgress = event.payload;
     renderProgress();
+  });
+  await listen("arena-launch-exit", event => {
+    const result = event.payload;
+    latestLaunchExit = result;
+    launching = false;
+    renderUpdate();
+    reportLaunchExit(result);
   });
 }
 

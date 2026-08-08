@@ -162,6 +162,7 @@ name = "bmsir-arena-launcher"
 version = "0.2.11"
 dependencies = [
  "base64 0.22.1",
+ "dunce",
  "ed25519-dalek",
  "serde",
  "serde_jcs",
