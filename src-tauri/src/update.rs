@@ -338,12 +338,26 @@ fn list_deprecated_versions_from(
     let versions = fetch_history_from(base_url, public_key, selected_channel, selected_platform)?;
     let (_, published_release) =
         fetch_release_from(base_url, public_key, selected_channel, selected_platform)?;
-    Ok(versions
+    let candidates = versions
         .into_iter()
         .filter(|entry| {
             entry.version != current_version && entry.version != published_release.version
         })
-        .collect())
+        .collect::<Vec<_>>();
+    let mut body_versions = Vec::with_capacity(candidates.len());
+    for entry in candidates {
+        let manifest = fetch_versioned_manifest_from(
+            base_url,
+            public_key,
+            selected_channel,
+            selected_platform,
+            &entry.version,
+        )?;
+        if release_contains_game_jar(&manifest) {
+            body_versions.push(entry);
+        }
+    }
+    Ok(body_versions)
 }
 
 fn fetch_versioned_manifest_from(
@@ -373,6 +387,13 @@ fn fetch_versioned_manifest_from(
         return Err(UpdateError::WrongTarget);
     }
     Ok(manifest)
+}
+
+fn release_contains_game_jar(manifest: &ReleaseManifest) -> bool {
+    manifest
+        .artifacts
+        .iter()
+        .any(|artifact| artifact.path.eq_ignore_ascii_case(CANONICAL_GAME_JAR))
 }
 
 /// Replaces only the canonical game JAR with the one from an older, still
@@ -481,21 +502,51 @@ where
 
     let destination = root.join(CANONICAL_GAME_JAR);
     let backup = staging_directory.join("downgrade.jar.previous");
-    let had_previous = destination.exists();
-    if had_previous {
-        fs::rename(&destination, &backup)?;
-    }
-    if let Err(error) = fs::rename(&staging_path, &destination) {
-        if had_previous {
-            let _ = fs::rename(&backup, &destination);
-        }
-        return Err(UpdateError::Io(error));
-    }
-    if had_previous {
-        let _ = fs::remove_file(&backup);
-    }
+    replace_game_jar_with_rollback(
+        &staging_path,
+        &destination,
+        &backup,
+        |from, to| fs::rename(from, to),
+        |path| fs::remove_file(path),
+    )?;
     progress(UpdateProgress::completed("applying", jar_artifact.size, 1));
     Ok(manifest)
+}
+
+fn replace_game_jar_with_rollback<R, D>(
+    staging_path: &Path,
+    destination: &Path,
+    backup: &Path,
+    mut rename: R,
+    mut remove_file: D,
+) -> io::Result<()>
+where
+    R: FnMut(&Path, &Path) -> io::Result<()>,
+    D: FnMut(&Path) -> io::Result<()>,
+{
+    let had_previous = destination.exists();
+    if had_previous {
+        rename(destination, backup)?;
+    }
+    if let Err(swap_error) = rename(staging_path, destination) {
+        if had_previous {
+            if let Err(restore_error) = rename(backup, destination) {
+                return Err(io::Error::new(
+                    restore_error.kind(),
+                    format!(
+                        "game JAR replacement failed ({swap_error}); restoring the previous JAR also failed ({restore_error})"
+                    ),
+                ));
+            }
+        }
+        return Err(swap_error);
+    }
+    if had_previous {
+        // The replacement already succeeded. Retaining a stale backup is safer
+        // than reporting the downgrade as failed after the new JAR is active.
+        let _ = remove_file(backup);
+    }
+    Ok(())
 }
 
 fn bootstrap_artifacts_present(release: &ReleaseManifest) -> bool {
@@ -1749,6 +1800,15 @@ mod tests {
         serde_json::to_vec(&manifest).unwrap()
     }
 
+    fn game_jar_artifact(bytes: &[u8]) -> Value {
+        json!({
+            "path": CANONICAL_GAME_JAR,
+            "sha256": format!("{:x}", Sha256::digest(bytes)),
+            "size": bytes.len(),
+            "executable": false
+        })
+    }
+
     /// Spawns a thread that replies to `responses.len()` sequential requests
     /// on one connection each, asserting the exact path requested for every
     /// reply in order.
@@ -1827,6 +1887,22 @@ mod tests {
             "0.2.0",
             vec![],
         );
+        let body_013_manifest = signed_downgrade_manifest_bytes(
+            &signing,
+            "test",
+            "windows-x64",
+            "0.4.13",
+            "0.2.0",
+            vec![game_jar_artifact(b"0.4.13")],
+        );
+        let body_012_manifest = signed_downgrade_manifest_bytes(
+            &signing,
+            "test",
+            "windows-x64",
+            "0.4.12",
+            "0.2.0",
+            vec![game_jar_artifact(b"0.4.12")],
+        );
 
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
@@ -1835,6 +1911,14 @@ mod tests {
             vec![
                 ("/channels/test/windows-x64/history.json", history_bytes),
                 ("/channels/test/windows-x64/manifest.json", manifest_bytes),
+                (
+                    "/channels/test/windows-x64/manifests/0.4.13.json",
+                    body_013_manifest,
+                ),
+                (
+                    "/channels/test/windows-x64/manifests/0.4.12.json",
+                    body_012_manifest,
+                ),
             ],
         );
 
@@ -1855,6 +1939,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["0.4.13", "0.4.12"]
         );
+        assert_eq!(versions[0].published_at, "2026-07-01T00:00:00Z");
     }
 
     #[test]
@@ -1881,6 +1966,14 @@ mod tests {
             "0.2.0",
             vec![],
         );
+        let body_013_manifest = signed_downgrade_manifest_bytes(
+            &signing,
+            "test",
+            "windows-x64",
+            "0.4.13",
+            "0.2.0",
+            vec![game_jar_artifact(b"0.4.13")],
+        );
 
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
@@ -1889,6 +1982,10 @@ mod tests {
             vec![
                 ("/channels/test/windows-x64/history.json", history_bytes),
                 ("/channels/test/windows-x64/manifest.json", manifest_bytes),
+                (
+                    "/channels/test/windows-x64/manifests/0.4.13.json",
+                    body_013_manifest,
+                ),
             ],
         );
 
@@ -1913,6 +2010,84 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["0.4.13"]
         );
+    }
+
+    #[test]
+    fn list_deprecated_versions_from_omits_launcher_only_releases() {
+        let signing = SigningKey::from_bytes(&[50_u8; 32]);
+        let history_bytes = signed_history_bytes(
+            &signing,
+            "test",
+            "windows-x64",
+            &[
+                ("0.4.14", "2026-08-01T00:00:00Z"),
+                ("0.4.13", "2026-07-01T00:00:00Z"),
+                ("0.2.11", "2026-06-01T00:00:00Z"),
+            ],
+        );
+        let published_manifest = signed_downgrade_manifest_bytes(
+            &signing,
+            "test",
+            "windows-x64",
+            "0.4.14",
+            "0.2.0",
+            vec![],
+        );
+        let body_manifest = signed_downgrade_manifest_bytes(
+            &signing,
+            "test",
+            "windows-x64",
+            "0.4.13",
+            "0.2.0",
+            vec![game_jar_artifact(b"0.4.13")],
+        );
+        let launcher_only_manifest = signed_downgrade_manifest_bytes(
+            &signing,
+            "test",
+            "windows-x64",
+            "0.2.11",
+            "0.2.0",
+            vec![json!({
+                "path": "BMS-IR Arena.exe",
+                "sha256": format!("{:x}", Sha256::digest(b"launcher")),
+                "size": 8,
+                "executable": true
+            })],
+        );
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = serve_sequential_responses(
+            listener,
+            vec![
+                ("/channels/test/windows-x64/history.json", history_bytes),
+                (
+                    "/channels/test/windows-x64/manifest.json",
+                    published_manifest,
+                ),
+                (
+                    "/channels/test/windows-x64/manifests/0.4.13.json",
+                    body_manifest,
+                ),
+                (
+                    "/channels/test/windows-x64/manifests/0.2.11.json",
+                    launcher_only_manifest,
+                ),
+            ],
+        );
+
+        let versions = list_deprecated_versions_from(
+            &format!("http://{address}"),
+            &STANDARD.encode(signing.verifying_key().to_bytes()),
+            "test",
+            "windows-x64",
+            "0.4.14",
+        )
+        .unwrap();
+        server.join().unwrap();
+
+        assert_eq!(versions.len(), 1);
+        assert_eq!(versions[0].version, "0.4.13");
     }
 
     #[test]
@@ -2237,6 +2412,17 @@ mod tests {
 
         let root = tempfile::tempdir().unwrap();
         make_ready_installation(root.path(), b"old-jar-body");
+        let sentinels = [
+            ("config_player.json", b"settings".as_slice()),
+            ("skin/custom/theme.json", b"skin".as_slice()),
+            ("replay/sample.brp", b"replay".as_slice()),
+            ("player/default/score.db", b"score-db".as_slice()),
+        ];
+        for (path, bytes) in sentinels {
+            let destination = root.path().join(path);
+            fs::create_dir_all(destination.parent().unwrap()).unwrap();
+            fs::write(destination, bytes).unwrap();
+        }
         let plugin_before = fs::read(root.path().join("ir/bms_ir_arena_oraja_0.0.69.jar")).unwrap();
         let java_before = fs::read(root.path().join("runtime/bin/java")).unwrap();
 
@@ -2266,10 +2452,49 @@ mod tests {
             fs::read(root.path().join("runtime/bin/java")).unwrap(),
             java_before
         );
+        for (path, bytes) in sentinels {
+            assert_eq!(fs::read(root.path().join(path)).unwrap(), bytes);
+        }
         assert!(!root
             .path()
             .join(STAGING_DIRECTORY)
             .join("downgrade.jar.previous")
             .exists());
+    }
+
+    #[test]
+    fn game_jar_swap_restores_the_previous_jar_after_replacement_failure() {
+        let root = tempfile::tempdir().unwrap();
+        let staging_directory = root.path().join(STAGING_DIRECTORY);
+        fs::create_dir_all(&staging_directory).unwrap();
+        let staging = staging_directory.join("downgrade.jar");
+        let destination = root.path().join(CANONICAL_GAME_JAR);
+        let backup = staging_directory.join("downgrade.jar.previous");
+        fs::write(&destination, b"old-jar-body").unwrap();
+        fs::write(&staging, b"new-jar-body").unwrap();
+
+        let mut rename_count = 0;
+        let result = replace_game_jar_with_rollback(
+            &staging,
+            &destination,
+            &backup,
+            |from, to| {
+                rename_count += 1;
+                if rename_count == 2 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "injected replacement failure",
+                    ));
+                }
+                fs::rename(from, to)
+            },
+            |path| fs::remove_file(path),
+        );
+
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(fs::read(&destination).unwrap(), b"old-jar-body");
+        assert_eq!(fs::read(&staging).unwrap(), b"new-jar-body");
+        assert!(!backup.exists());
+        assert_eq!(rename_count, 3);
     }
 }

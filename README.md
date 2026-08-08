@@ -44,6 +44,12 @@ Optional updates retain a launch-current action; mandatory or revoked versions
 do not. A client that has never downloaded the mandatory policy is still
 subject to the Arena service compatibility gate.
 
+The launcher can also list signed historical body releases as deprecated
+choices. It verifies each historical manifest before listing it and omits
+launcher-only releases that contain no `Arena-oraja.jar`. A downgrade replaces
+only that JAR with rollback protection; Java, plugins, launcher settings,
+skins, replays, and player databases remain untouched.
+
 Before launching, the launcher validates canonical Java, body-JAR, and root
 paths. Only at the Java process boundary it converts compatible Windows
 extended-length paths such as `\\?\C:\...` back to their ordinary form, so the
