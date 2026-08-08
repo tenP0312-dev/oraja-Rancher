@@ -65,7 +65,13 @@ const dictionary = {
     statusUpdateAvailable: "更新あり",
     statusMandatory: "必須更新",
     statusRevoked: "利用停止中",
-    statusLauncherTooOld: "ランチャー要更新"
+    statusLauncherTooOld: "ランチャー要更新",
+    pluginToggle: "Arenaプラグインの更新・旧版",
+    pluginCurrent: "プラグイン更新あり: {version}",
+    pluginCurrentOk: "プラグインは最新です",
+    pluginInstall: "このプラグインを適用",
+    pluginDeprecated: "旧プラグイン版",
+    pluginReleaseVersion: "プラグイン {plugin} / 本体リリース {release}"
   },
   en: {
     checking: "Checking for updates",
@@ -130,7 +136,13 @@ const dictionary = {
     statusUpdateAvailable: "Update available",
     statusMandatory: "Required update",
     statusRevoked: "Revoked",
-    statusLauncherTooOld: "Launcher needs updating"
+    statusLauncherTooOld: "Launcher needs updating",
+    pluginToggle: "Arena plugin updates and older versions",
+    pluginCurrent: "Plugin update available: {version}",
+    pluginCurrentOk: "The plugin is up to date",
+    pluginInstall: "Apply this plugin",
+    pluginDeprecated: "Older plugin release",
+    pluginReleaseVersion: "Plugin {plugin} / body release {release}"
   }
 };
 
@@ -147,6 +159,9 @@ let deprecatedVersions = null;
 let deprecatedVisible = false;
 let deprecatedLoading = false;
 let downgradingVersion = null;
+let pluginVisible = false;
+let pluginVersions = null;
+let pluginUpdate = null;
 const deprecatedNotesCache = {};
 const byId = id => document.getElementById(id);
 const tr = key => dictionary[language][key];
@@ -162,6 +177,89 @@ function applyLanguage() {
   renderUpdate();
   renderProgress();
   renderDeprecated();
+  renderPlugins();
+}
+
+function renderPlugins() {
+  const toggle = byId("plugin-toggle");
+  const container = byId("plugin-list-container");
+  if (!toggle || !container) return;
+  toggle.setAttribute("aria-expanded", String(pluginVisible));
+  container.hidden = !pluginVisible;
+  if (!pluginVisible) return;
+  byId("plugin-current").textContent = pluginUpdate
+    ? tr("pluginCurrent").replace("{version}", pluginVersionLabel(pluginUpdate))
+    : tr("pluginCurrentOk");
+  const list = byId("plugin-list");
+  list.replaceChildren();
+  if (pluginUpdate) {
+    appendPluginRelease(list, pluginUpdate, false);
+  }
+  (pluginVersions || []).forEach(entry => {
+    appendPluginRelease(list, entry, true);
+  });
+}
+
+function pluginVersionLabel(entry) {
+  const filename = String(entry?.artifact_path || "").split("/").pop() || "";
+  const versionMatch = filename.match(/_(\d+(?:\.\d+)+(?:[-+][A-Za-z0-9.-]+)?)\.jar$/i);
+  return versionMatch ? versionMatch[1] : filename || String(entry?.version || "");
+}
+
+function appendPluginRelease(list, entry, deprecated) {
+  const item = document.createElement("li");
+  const row = document.createElement("div");
+  row.className = "deprecated-row";
+  const label = document.createElement("span");
+  const publishedAt = formatPublishedAt(entry.published_at) || entry.published_at;
+  const releaseLabel = tr("pluginReleaseVersion")
+    .replace("{plugin}", pluginVersionLabel(entry))
+    .replace("{release}", entry.version);
+  label.textContent = `${releaseLabel} · ${publishedAt}${deprecated ? ` (${tr("pluginDeprecated")})` : ""}`;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = deprecated ? "quiet" : "primary";
+  button.textContent = tr("pluginInstall");
+  button.disabled = installingUpdate;
+  button.addEventListener("click", () => installPlugin(entry.version));
+  row.append(label, button);
+
+  const details = document.createElement("details");
+  const summary = document.createElement("summary");
+  summary.textContent = tr("releaseNotesToggle");
+  const notes = document.createElement("div");
+  notes.className = "notes";
+  details.append(summary, notes);
+  details.addEventListener("toggle", () => {
+    if (details.open) loadDeprecatedNotes(entry.version, notes);
+  });
+  item.append(row, details);
+  list.append(item);
+}
+
+async function togglePlugins() {
+  pluginVisible = !pluginVisible;
+  if (pluginVisible && pluginVersions === null) {
+    try {
+      [pluginUpdate, pluginVersions] = await Promise.all([
+        invoke("check_plugin_update"), invoke("list_deprecated_plugin_versions")
+      ]);
+    } catch (error) { showError(error); pluginVersions = []; }
+  }
+  renderPlugins();
+}
+
+async function installPlugin(version) {
+  installingUpdate = true; updateProgress = {phase:"downloading", bytes_done:0, bytes_total:0, files_done:0, files_total:1};
+  renderUpdate(); renderProgress();
+  try {
+    await invoke("install_plugin_version", {version});
+    [pluginUpdate, pluginVersions] = await Promise.all([
+      invoke("check_plugin_update"), invoke("list_deprecated_plugin_versions")
+    ]);
+    hideError();
+  } catch (error) { showError(error); }
+  finally { installingUpdate = false; updateProgress = null; renderProgress(); renderPlugins(); renderUpdate(); }
 }
 
 function setStatus(text, kind = "neutral") {
@@ -679,6 +777,7 @@ byId("check").addEventListener("click", checkUpdate);
 byId("update-launch").addEventListener("click", installAndLaunch);
 byId("launch-current").addEventListener("click", () => launch(false));
 byId("deprecated-toggle").addEventListener("click", toggleDeprecated);
+byId("plugin-toggle").addEventListener("click", togglePlugins);
 
 if (listen) {
   await listen("arena-update-progress", event => {

@@ -5,7 +5,7 @@ use crate::manifest::{
 };
 use serde::Serialize;
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -435,6 +435,196 @@ fn release_contains_game_jar(manifest: &ReleaseManifest) -> bool {
         .artifacts
         .iter()
         .any(|artifact| artifact.path.eq_ignore_ascii_case(CANONICAL_GAME_JAR))
+}
+
+fn release_plugin_artifact(manifest: &ReleaseManifest) -> Option<&ReleaseArtifact> {
+    let mut plugins = manifest.artifacts.iter().filter(|artifact| {
+        let path = Path::new(&artifact.path);
+        path.parent()
+            .and_then(Path::to_str)
+            .is_some_and(|parent| parent.eq_ignore_ascii_case("ir"))
+            && path
+                .extension()
+                .and_then(|value| value.to_str())
+                .is_some_and(|value| value.eq_ignore_ascii_case("jar"))
+            && path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .is_some_and(|value| value.to_ascii_lowercase().starts_with("bms_ir"))
+    });
+    let plugin = plugins.next()?;
+    if plugins.next().is_some() {
+        None
+    } else {
+        Some(plugin)
+    }
+}
+
+/// A plugin release is identified by its signed channel release, rather than
+/// by an untrusted filename.  The artifact's hash and exact path remain part
+/// of the manifest signature.
+#[derive(Debug, Clone, Serialize)]
+pub struct PluginRelease {
+    pub version: String,
+    pub published_at: String,
+    pub artifact_path: String,
+}
+
+pub fn list_deprecated_plugin_versions() -> Result<Vec<PluginRelease>, UpdateError> {
+    list_deprecated_plugin_versions_from(
+        update_base_url()?,
+        release_public_key()?,
+        &channel(),
+        platform(),
+    )
+}
+
+fn list_deprecated_plugin_versions_from(
+    base_url: &str,
+    public_key: &str,
+    selected_channel: &str,
+    selected_platform: &str,
+) -> Result<Vec<PluginRelease>, UpdateError> {
+    let (_, current) =
+        fetch_release_from(base_url, public_key, selected_channel, selected_platform)?;
+    let mut result = Vec::new();
+    let mut seen_plugin_hashes = HashSet::new();
+    if let Some(artifact) = release_plugin_artifact(&current) {
+        seen_plugin_hashes.insert(artifact.sha256.to_ascii_lowercase());
+    }
+    for entry in fetch_history_from(base_url, public_key, selected_channel, selected_platform)? {
+        if entry.version == current.version {
+            continue;
+        }
+        let manifest = fetch_versioned_manifest_from(
+            base_url,
+            public_key,
+            selected_channel,
+            selected_platform,
+            &entry.version,
+        )?;
+        if let Some(artifact) = release_plugin_artifact(&manifest) {
+            if !seen_plugin_hashes.insert(artifact.sha256.to_ascii_lowercase()) {
+                continue;
+            }
+            result.push(PluginRelease {
+                version: entry.version,
+                published_at: entry.published_at,
+                artifact_path: artifact.path.clone(),
+            });
+        }
+    }
+    Ok(result)
+}
+
+pub fn plugin_update(root: &Path) -> Result<Option<PluginRelease>, UpdateError> {
+    let (_, manifest) = fetch_release()?;
+    let Some(artifact) = release_plugin_artifact(&manifest) else {
+        return Ok(None);
+    };
+    if artifact_matches(root, artifact) {
+        return Ok(None);
+    }
+    Ok(Some(PluginRelease {
+        version: manifest.version.clone(),
+        published_at: manifest.published_at.clone(),
+        artifact_path: artifact.path.clone(),
+    }))
+}
+
+pub fn install_plugin_version<F>(
+    root: &Path,
+    version: &str,
+    launcher_version: &str,
+    progress: F,
+) -> Result<PluginRelease, UpdateError>
+where
+    F: FnMut(UpdateProgress),
+{
+    install_plugin_version_from(
+        update_base_url()?,
+        release_public_key()?,
+        &channel(),
+        platform(),
+        root,
+        version,
+        launcher_version,
+        progress,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn install_plugin_version_from<F>(
+    base_url: &str,
+    public_key: &str,
+    selected_channel: &str,
+    selected_platform: &str,
+    root: &Path,
+    version: &str,
+    launcher_version: &str,
+    mut progress: F,
+) -> Result<PluginRelease, UpdateError>
+where
+    F: FnMut(UpdateProgress),
+{
+    let history = fetch_history_from(base_url, public_key, selected_channel, selected_platform)?;
+    if !history.iter().any(|entry| entry.version == version) {
+        return Err(UpdateError::Manifest(
+            crate::manifest::ManifestError::HistoryVersionMissing,
+        ));
+    }
+    let manifest = fetch_versioned_manifest_from(
+        base_url,
+        public_key,
+        selected_channel,
+        selected_platform,
+        version,
+    )?;
+    if compare_versions(launcher_version, &manifest.minimum_launcher_version) == Ordering::Less {
+        return Err(UpdateError::DowngradeLauncherTooOld);
+    }
+    let installation = crate::install::inspect(root)?;
+    if installation.plugin_jars.len() != 1 {
+        return Err(UpdateError::DowngradeInstallationNotReady);
+    }
+    let artifact = release_plugin_artifact(&manifest)
+        .ok_or(UpdateError::DowngradeArtifactMissing)?
+        .clone();
+    let staging = root.join(STAGING_DIRECTORY);
+    let staged_path = staging.join(&artifact.path);
+    fs::create_dir_all(staged_path.parent().ok_or(UpdateError::UnsafeStaging)?)?;
+    let mut url_segments = vec![
+        "channels",
+        selected_channel,
+        selected_platform,
+        "releases",
+        version,
+    ];
+    url_segments.extend(artifact.path.split('/'));
+    let url = append_url(base_url, &url_segments)?;
+    let mut done = 0;
+    download_to_path(
+        &url,
+        &staged_path,
+        artifact.size,
+        &mut done,
+        artifact.size,
+        0,
+        1,
+        &mut progress,
+    )?;
+    verify_file(&staged_path, &artifact)?;
+    // Reuse the install transaction: it moves the old single plugin to its
+    // backup, swaps the verified staged JAR, and restores it on any failure.
+    let mut plugin_manifest = manifest.clone();
+    plugin_manifest.artifacts = vec![artifact.clone()];
+    crate::install::apply_staged_mode(root, &staging, &plugin_manifest, false)?;
+    progress(UpdateProgress::completed("applying", artifact.size, 1));
+    Ok(PluginRelease {
+        version: version.to_owned(),
+        published_at: manifest.published_at,
+        artifact_path: artifact.path,
+    })
 }
 
 /// Replaces only the canonical game JAR with the one from an older, still
@@ -1850,6 +2040,15 @@ mod tests {
         })
     }
 
+    fn plugin_artifact(path: &str, bytes: &[u8]) -> Value {
+        json!({
+            "path": path,
+            "sha256": format!("{:x}", Sha256::digest(bytes)),
+            "size": bytes.len(),
+            "executable": false
+        })
+    }
+
     /// Spawns a thread that replies to `responses.len()` sequential requests
     /// on one connection each, asserting the exact path requested for every
     /// reply in order.
@@ -1981,6 +2180,166 @@ mod tests {
             vec!["0.4.13", "0.4.12"]
         );
         assert_eq!(versions[0].published_at, "2026-07-01T00:00:00Z");
+    }
+
+    #[test]
+    fn deprecated_plugin_versions_are_signed_distinct_and_plugin_bearing() {
+        let signing = SigningKey::from_bytes(&[55_u8; 32]);
+        let history = signed_history_bytes(
+            &signing,
+            "test",
+            "windows-x64",
+            &[
+                ("0.4.14.24", "2026-08-09T00:00:00Z"),
+                ("0.4.14.23", "2026-08-08T00:00:00Z"),
+                ("0.4.14.22", "2026-08-07T00:00:00Z"),
+                ("0.2.16", "2026-08-06T00:00:00Z"),
+            ],
+        );
+        let current = signed_downgrade_manifest_bytes(
+            &signing,
+            "test",
+            "windows-x64",
+            "0.4.14.24",
+            "0.2.0",
+            vec![plugin_artifact("ir/bms_ir_arena_0.0.70.jar", b"current")],
+        );
+        let old = signed_downgrade_manifest_bytes(
+            &signing,
+            "test",
+            "windows-x64",
+            "0.4.14.23",
+            "0.2.0",
+            vec![plugin_artifact("IR/bms_ir_arena_0.0.69.jar", b"old")],
+        );
+        let duplicate = signed_downgrade_manifest_bytes(
+            &signing,
+            "test",
+            "windows-x64",
+            "0.4.14.22",
+            "0.2.0",
+            vec![plugin_artifact("ir/bms_ir_arena_0.0.69.jar", b"old")],
+        );
+        let launcher_only = signed_downgrade_manifest_bytes(
+            &signing,
+            "test",
+            "windows-x64",
+            "0.2.16",
+            "0.2.0",
+            vec![],
+        );
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = serve_sequential_responses(
+            listener,
+            vec![
+                ("/channels/test/windows-x64/manifest.json", current),
+                ("/channels/test/windows-x64/history.json", history),
+                ("/channels/test/windows-x64/manifests/0.4.14.23.json", old),
+                (
+                    "/channels/test/windows-x64/manifests/0.4.14.22.json",
+                    duplicate,
+                ),
+                (
+                    "/channels/test/windows-x64/manifests/0.2.16.json",
+                    launcher_only,
+                ),
+            ],
+        );
+
+        let releases = list_deprecated_plugin_versions_from(
+            &format!("http://{address}"),
+            &STANDARD.encode(signing.verifying_key().to_bytes()),
+            "test",
+            "windows-x64",
+        )
+        .unwrap();
+        server.join().unwrap();
+
+        assert_eq!(releases.len(), 1);
+        assert_eq!(releases[0].version, "0.4.14.23");
+        assert_eq!(releases[0].artifact_path, "IR/bms_ir_arena_0.0.69.jar");
+    }
+
+    #[test]
+    fn historical_plugin_install_replaces_only_the_plugin() {
+        let signing = SigningKey::from_bytes(&[56_u8; 32]);
+        let version = "0.4.14.23";
+        let plugin_path = "ir/bms_ir_arena_0.0.69.jar";
+        let plugin_bytes = b"historical-plugin";
+        let history = signed_history_bytes(
+            &signing,
+            "test",
+            "windows-x64",
+            &[(version, "2026-08-08T00:00:00Z")],
+        );
+        let manifest = signed_downgrade_manifest_bytes(
+            &signing,
+            "test",
+            "windows-x64",
+            version,
+            "0.2.0",
+            vec![plugin_artifact(plugin_path, plugin_bytes)],
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = serve_sequential_responses(
+            listener,
+            vec![
+                ("/channels/test/windows-x64/history.json", history),
+                (
+                    "/channels/test/windows-x64/manifests/0.4.14.23.json",
+                    manifest,
+                ),
+                (
+                    "/channels/test/windows-x64/releases/0.4.14.23/ir/bms_ir_arena_0.0.69.jar",
+                    plugin_bytes.to_vec(),
+                ),
+            ],
+        );
+
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("ir")).unwrap();
+        fs::create_dir_all(root.path().join("skin")).unwrap();
+        fs::write(root.path().join("ir/bms_ir_arena_0.0.70.jar"), b"current").unwrap();
+        fs::write(root.path().join("playerconfig.json"), b"settings").unwrap();
+        fs::write(root.path().join("score.db"), b"scores").unwrap();
+        fs::write(root.path().join("skin/selected.json"), b"skin").unwrap();
+
+        let mut progress = Vec::new();
+        let installed = install_plugin_version_from(
+            &format!("http://{address}"),
+            &STANDARD.encode(signing.verifying_key().to_bytes()),
+            "test",
+            "windows-x64",
+            root.path(),
+            version,
+            "0.2.17",
+            |event| progress.push(event),
+        )
+        .unwrap();
+        server.join().unwrap();
+
+        assert_eq!(installed.version, version);
+        assert_eq!(
+            fs::read(root.path().join(plugin_path)).unwrap(),
+            plugin_bytes
+        );
+        assert!(!root.path().join("ir/bms_ir_arena_0.0.70.jar").exists());
+        assert_eq!(
+            fs::read(root.path().join("playerconfig.json")).unwrap(),
+            b"settings"
+        );
+        assert_eq!(fs::read(root.path().join("score.db")).unwrap(), b"scores");
+        assert_eq!(
+            fs::read(root.path().join("skin/selected.json")).unwrap(),
+            b"skin"
+        );
+        assert_eq!(
+            progress.last().map(|event| event.phase.as_str()),
+            Some("applying")
+        );
     }
 
     #[test]
@@ -2588,5 +2947,42 @@ mod tests {
         assert_eq!(fs::read(&staging).unwrap(), b"new-jar-body");
         assert!(!backup.exists());
         assert_eq!(rename_count, 3);
+    }
+
+    #[test]
+    fn plugin_release_requires_exactly_one_direct_ir_plugin_jar() {
+        let artifact = |path: &str| ReleaseArtifact {
+            path: path.into(),
+            sha256: "00".repeat(32),
+            size: 1,
+            executable: false,
+        };
+        let manifest = ReleaseManifest {
+            schema_version: 1,
+            channel: "test".into(),
+            platform: "windows-x64".into(),
+            version: "0.4.14".into(),
+            published_at: "2026-08-09T00:00:00Z".into(),
+            release_notes_markdown: String::new(),
+            release_notes_markdown_ja: String::new(),
+            release_notes_markdown_en: String::new(),
+            announcements: vec![],
+            mandatory: false,
+            minimum_launcher_version: "0.2.0".into(),
+            revoked_versions: vec![],
+            bootstrap: None,
+            artifacts: vec![artifact("ir/bms_ir_arena.jar")],
+            signature: String::new(),
+        };
+        assert_eq!(
+            release_plugin_artifact(&manifest).unwrap().path,
+            "ir/bms_ir_arena.jar"
+        );
+        let mut invalid = manifest.clone();
+        invalid.artifacts = vec![artifact("plugins/bms_ir_arena.jar")];
+        assert!(release_plugin_artifact(&invalid).is_none());
+        let mut ambiguous = manifest;
+        ambiguous.artifacts.push(artifact("ir/bms_ir_second.jar"));
+        assert!(release_plugin_artifact(&ambiguous).is_none());
     }
 }
