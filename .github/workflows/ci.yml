@@ -125,7 +125,7 @@ jobs:
         env:
           BMSIR_ARENA_UPDATE_BASE_URL: ${{ vars.ARENA_TEST_UPDATE_BASE_URL }}
           BMSIR_ARENA_RELEASE_PUBLIC_KEY: ${{ vars.ARENA_TEST_RELEASE_PUBLIC_KEY }}
-          BMSIR_ARENA_CLIENT_VERSION: "0.4.14.23"
+          BMSIR_ARENA_CLIENT_VERSION: "0.4.14.25"
         run: |
           if (-not $env:BMSIR_ARENA_UPDATE_BASE_URL -or -not $env:BMSIR_ARENA_RELEASE_PUBLIC_KEY) {
             throw "Internal test update URL or public key is not configured"
@@ -151,7 +151,7 @@ jobs:
         env:
           BMSIR_ARENA_UPDATE_BASE_URL: ${{ vars.ARENA_TEST_UPDATE_BASE_URL }}
           BMSIR_ARENA_RELEASE_PUBLIC_KEY: ${{ vars.ARENA_TEST_RELEASE_PUBLIC_KEY }}
-          BMSIR_ARENA_CLIENT_VERSION: "0.4.14.23"
+          BMSIR_ARENA_CLIENT_VERSION: "0.4.14.25"
         run: |
           if test -z "$BMSIR_ARENA_UPDATE_BASE_URL" || test -z "$BMSIR_ARENA_RELEASE_PUBLIC_KEY"; then
             echo "Internal test update URL or public key is not configured" >&2
