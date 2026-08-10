@@ -1,11 +1,11 @@
 use crate::manifest::{verify_file, ManifestError, ReleaseManifest};
+use crate::update::UpdateTarget;
 use serde::Serialize;
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
@@ -52,8 +52,6 @@ pub enum InstallError {
         #[source]
         source: io::Error,
     },
-    #[error("Arena oraja launch monitor ended before reporting its result")]
-    LaunchMonitorDisconnected,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -572,6 +570,8 @@ pub fn spawn_self_update(
     manifest_path: &Path,
     manifest: &ReleaseManifest,
     bootstrap_install: bool,
+    target: UpdateTarget,
+    writes_body_version: bool,
     launch_after: bool,
 ) -> Result<(), InstallError> {
     let root = launcher_install_root()?;
@@ -603,6 +603,8 @@ pub fn spawn_self_update(
         .arg(manifest_path)
         .arg(launcher_path)
         .arg(if bootstrap_install { "1" } else { "0" })
+        .arg(target.as_argument())
+        .arg(if writes_body_version { "1" } else { "0" })
         .arg(if launch_after { "1" } else { "0" })
         .spawn()?;
     Ok(())
@@ -614,35 +616,30 @@ pub fn run_self_update_helper(
     manifest: &ReleaseManifest,
     launcher_path: &str,
     bootstrap_install: bool,
+    target: UpdateTarget,
+    writes_body_version: bool,
     launch_after: bool,
 ) -> Result<(), InstallError> {
+    let selected_manifest = crate::update::release_for_target(manifest, target)
+        .map_err(|_| InstallError::LauncherArtifactMissing)?;
     let mut last_error = None;
     for _ in 0..40 {
         thread::sleep(Duration::from_millis(250));
-        match apply_staged_mode(root, staging, manifest, bootstrap_install) {
+        match apply_staged_mode(root, staging, &selected_manifest, bootstrap_install) {
             Ok(()) => {
                 let installation = inspect(root)?;
                 if !is_ready(&installation) {
                     return Err(InstallError::InvalidRoot);
                 }
-                write_version_marker(root, &manifest.version)?;
-                cleanup_completed_update(root, staging);
-                if launch_after {
-                    let java = installation
-                        .java_runtime
-                        .as_deref()
-                        .map(Path::new)
-                        .ok_or(InstallError::UnsupportedJava)?;
-                    let game = installation
-                        .game_jar
-                        .as_deref()
-                        .map(Path::new)
-                        .ok_or(InstallError::InvalidRoot)?;
-                    let java_source = installation.java_source.as_deref().unwrap_or("unknown");
-                    let _ = launch_and_wait(root, java, java_source, game, false)?;
-                } else {
-                    Command::new(root.join(launcher_path)).spawn()?;
+                if writes_body_version {
+                    write_version_marker(root, &manifest.version)?;
                 }
+                cleanup_completed_update(root, staging);
+                let mut launcher = Command::new(root.join(launcher_path));
+                if launch_after {
+                    launcher.arg("--launch-after-update");
+                }
+                launcher.spawn()?;
                 return Ok(());
             }
             Err(error) => last_error = Some(error),
@@ -935,29 +932,6 @@ where
     })
 }
 
-pub fn launch_and_wait(
-    root: &Path,
-    java: &Path,
-    java_source: &str,
-    game_jar: &Path,
-    configuration: bool,
-) -> Result<LaunchExit, InstallError> {
-    let (sender, receiver) = mpsc::sync_channel(1);
-    launch_with_source(
-        root,
-        java,
-        java_source,
-        game_jar,
-        configuration,
-        move |outcome| {
-            let _ = sender.send(outcome);
-        },
-    )?;
-    receiver
-        .recv()
-        .map_err(|_| InstallError::LaunchMonitorDisconnected)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -982,6 +956,7 @@ mod tests {
             announcements: vec![],
             mandatory: false,
             minimum_launcher_version: "0.1.0".into(),
+            launcher_version: String::new(),
             revoked_versions: vec![],
             bootstrap: None,
             artifacts: vec![ReleaseArtifact {
@@ -1025,6 +1000,7 @@ mod tests {
             announcements: vec![],
             mandatory: false,
             minimum_launcher_version: "0.2.8".into(),
+            launcher_version: String::new(),
             revoked_versions: vec![],
             bootstrap: None,
             artifacts: vec![
@@ -1068,6 +1044,7 @@ mod tests {
             announcements: vec![],
             mandatory: false,
             minimum_launcher_version: "0.2.8".into(),
+            launcher_version: String::new(),
             revoked_versions: vec![],
             bootstrap: Some(ReleaseBootstrap {
                 url: "https://example.test/bootstrap.zip".into(),
@@ -1113,6 +1090,7 @@ mod tests {
             announcements: vec![],
             mandatory: false,
             minimum_launcher_version: "0.1.0".into(),
+            launcher_version: String::new(),
             revoked_versions: vec![],
             bootstrap: None,
             artifacts: vec![],
@@ -1374,6 +1352,7 @@ exit {exit_code}
             announcements: vec![],
             mandatory: false,
             minimum_launcher_version: "0.1.0".into(),
+            launcher_version: String::new(),
             revoked_versions: vec![],
             bootstrap: None,
             artifacts: vec![ReleaseArtifact {
@@ -1425,6 +1404,7 @@ exit {exit_code}
             announcements: vec![],
             mandatory: false,
             minimum_launcher_version: "0.1.0".into(),
+            launcher_version: String::new(),
             revoked_versions: vec![],
             bootstrap: None,
             artifacts: vec![
@@ -1474,6 +1454,7 @@ exit {exit_code}
             announcements: vec![],
             mandatory: false,
             minimum_launcher_version: "0.1.0".into(),
+            launcher_version: String::new(),
             revoked_versions: vec![],
             bootstrap: None,
             artifacts: vec![
@@ -1528,6 +1509,7 @@ exit {exit_code}
             announcements: vec![],
             mandatory: false,
             minimum_launcher_version: "0.1.0".into(),
+            launcher_version: String::new(),
             revoked_versions: vec![],
             bootstrap: None,
             artifacts: vec![ReleaseArtifact {
@@ -1570,6 +1552,7 @@ exit {exit_code}
             announcements: vec![],
             mandatory: false,
             minimum_launcher_version: "0.1.0".into(),
+            launcher_version: String::new(),
             revoked_versions: vec![],
             bootstrap: None,
             artifacts: vec![ReleaseArtifact {

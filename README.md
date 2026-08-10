@@ -6,11 +6,18 @@ There is no installer, MSI, registry write, administrator requirement, Start
 Menu registration, or folder picker. Existing BAT and command launch remain
 valid.
 
-The window exposes three normal actions:
+When the installation is current, the first action row exposes the three
+normal actions in the order users need them:
 
-- launch Arena
+- view the signed release notes
 - open the existing pre-launch configuration with `-c`
-- check for updates
+- launch Arena
+
+The update check and advanced version/plugin controls remain available below.
+When an update exists, the body and launcher cards show their installed and
+available versions independently. Users can update either component or apply
+all available components together; an empty installation and mandatory policy
+still require the complete signed release.
 
 The dedicated game body is `Arena-oraja.jar`. Existing `beatoraja.jar` and
 versioned Arena oraja JARs remain launchable only as compatibility fallbacks;
@@ -26,7 +33,11 @@ indeterminate update message.
 Update checks use the channel selected from the executable name. `BMS-IR
 Arena.exe` reads `stable`; `BMS-IR Arena Test.exe` reads `test`, so separate
 folders can coexist. The equivalent macOS app bundle names select the same
-channels. Network failure does not newly block a valid installed body. Once a
+channels. The signed manifest may declare `launcher_version`; the matching
+platform launcher artifact is required in that release, so a current body can
+still discover and install a newer launcher. Older manifests without this
+field remain readable and simply do not advertise an independent launcher
+update. Network failure does not newly block a valid installed body. Once a
 signed mandatory update, revocation, or minimum-launcher requirement has been
 verified, the launcher caches that signed policy and keeps blocking the old
 version during later network failures. The Rust launch command enforces the
@@ -62,8 +73,12 @@ paths. Only at the Java process boundary it converts compatible Windows
 extended-length paths such as `\\?\C:\...` back to their ordinary form, so the
 JVM does not receive a path format it may reject. Each launch appends its mode,
 Java source, PID, stdout/stderr, and exit result to `arena-launch.log` in the
-portable root. The launcher stays open while Arena is running and shows a
-diagnostic with that log path when the game exits unsuccessfully or immediately.
+portable root. Tray residency, daily background update checks, and launch at
+login are opt-in portable settings. With residency enabled, launching Arena
+hides the window and keeps the tray and launch monitor alive; with it disabled,
+a normal Arena launch exits the launcher. Pre-launch configuration keeps the
+launcher available. A resident launcher shows a diagnostic with the log path
+when the game exits unsuccessfully or immediately.
 
 The signed manifest carries Japanese and English release notes plus up to 20
 newest-first announcements with an ISO date and title in both languages. The
@@ -81,9 +96,12 @@ errors are retried with a bounded backoff. Files are staged under the portable
 root, signed executable flags are applied before a staged launcher is started,
 and installation is backed up, replaced, and rolled back on failure. A launcher
 update starts the verified staged executable as a helper, waits for the old
-process, applies the same transaction, removes staging and backup data, and
-then starts the game when requested. The helper runs from a small verified copy
-outside staging so Windows can remove the downloaded update immediately.
+process, applies the selected signed component transaction, removes staging and
+backup data, and relaunches the updated launcher. Older launchers that requested
+an immediate game start are handled by relaunching the new launcher with a
+one-shot launch argument, so the saved residency policy is still honored. The
+helper runs from a small verified copy outside staging so Windows can remove
+the downloaded update immediately.
 
 The static patch publication tools and manifest layout are maintained in
 `tenP0312-dev/bms-ir-arena-patch-server`. Build variables are:

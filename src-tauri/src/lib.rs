@@ -1,5 +1,6 @@
 mod install;
 mod manifest;
+mod settings;
 mod update;
 
 use install::InstallationInfo;
@@ -7,10 +8,17 @@ use serde::Serialize;
 use std::env;
 use std::fs;
 use std::path::Path;
-use tauri::{AppHandle, Emitter};
+use std::time::Duration;
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::TrayIconBuilder;
+use tauri::{AppHandle, Emitter, Manager, WindowEvent};
+use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
 
 const UPDATE_PROGRESS_EVENT: &str = "arena-update-progress";
 const LAUNCH_EXIT_EVENT: &str = "arena-launch-exit";
+const MAIN_WINDOW_LABEL: &str = "main";
+const BACKGROUND_CHECK_INTERVAL_MILLIS: u64 = 24 * 60 * 60 * 1000;
+const BACKGROUND_POLL_INTERVAL: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Debug, Serialize)]
 struct LauncherState {
@@ -64,6 +72,7 @@ async fn check_online_update() -> Result<update::UpdateInfo, String> {
 #[tauri::command]
 async fn install_online_update(
     app: AppHandle,
+    target: update::UpdateTarget,
     launch_after: bool,
 ) -> Result<Option<install::LaunchInfo>, String> {
     let root = install::launcher_install_root().map_err(|error| error.to_string())?;
@@ -72,7 +81,7 @@ async fn install_online_update(
     let prepare_root = root.clone();
     let progress_app = app.clone();
     let prepared = tauri::async_runtime::spawn_blocking(move || {
-        update::prepare_with_progress(&prepare_root, installation_ready, |progress| {
+        update::prepare_with_progress(&prepare_root, installation_ready, target, |progress| {
             let _ = progress_app.emit(UPDATE_PROGRESS_EVENT, progress);
         })
     })
@@ -96,6 +105,8 @@ async fn install_online_update(
             &prepared.manifest_path,
             &prepared.manifest,
             prepared.bootstrap_install,
+            prepared.target,
+            prepared.writes_body_version,
             launch_after,
         )
         .map_err(|error| error.to_string())?;
@@ -137,10 +148,14 @@ async fn install_online_update(
             "the signed release did not install Arena oraja, Java, and its plugin".to_string(),
         );
     }
-    install::write_version_marker(&root, &prepared.manifest.version)
-        .map_err(|error| error.to_string())?;
+    if prepared.writes_body_version {
+        install::write_version_marker(&root, &prepared.manifest.version)
+            .map_err(|error| error.to_string())?;
+    }
     let launch = if launch_after {
-        Some(launch_detected(&app, &root, false)?)
+        let info = launch_detected(&app, &root, false)?;
+        apply_post_launch_behavior(&app, false);
+        Some(info)
     } else {
         None
     };
@@ -217,12 +232,160 @@ async fn install_plugin_version(app: AppHandle, version: String) -> Result<Strin
 }
 
 #[tauri::command]
+fn get_launcher_settings() -> Result<settings::LauncherSettings, String> {
+    let root = install::launcher_install_root().map_err(|error| error.to_string())?;
+    Ok(settings::load_settings(&root))
+}
+
+#[tauri::command]
+fn set_launcher_settings(
+    app: AppHandle,
+    mut settings: settings::LauncherSettings,
+) -> Result<settings::LauncherSettings, String> {
+    if !settings.resident {
+        settings.autostart = false;
+    }
+    let root = install::launcher_install_root().map_err(|error| error.to_string())?;
+    let previous = settings::load_settings(&root);
+    if previous.autostart != settings.autostart {
+        let manager = app.autolaunch();
+        let result = if settings.autostart {
+            manager.enable()
+        } else {
+            manager.disable()
+        };
+        result.map_err(|error| error.to_string())?;
+    }
+    settings::save_settings(&root, &settings).map_err(|error| error.to_string())?;
+    Ok(settings)
+}
+
+fn current_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn spawn_background_check_loop(app: AppHandle) {
+    std::thread::spawn(move || loop {
+        run_background_check_once(&app);
+        std::thread::sleep(BACKGROUND_POLL_INTERVAL);
+    });
+}
+
+fn run_background_check_once(app: &AppHandle) {
+    let Ok(root) = install::launcher_install_root() else {
+        return;
+    };
+    let mut current = settings::load_settings(&root);
+    if !current.background_check {
+        return;
+    }
+    let now = current_millis();
+    if now.saturating_sub(current.last_background_check_millis) < BACKGROUND_CHECK_INTERVAL_MILLIS {
+        return;
+    }
+    let Ok(installation) = install::inspect(&root) else {
+        return;
+    };
+    current.last_background_check_millis = now;
+    if let Ok(info) = update::check_installation(&root, install::is_ready(&installation)) {
+        let release_key = format!(
+            "{}/{}",
+            info.available_version, info.available_launcher_version
+        );
+        let should_notify = (info.body_update_available || info.launcher_update_available)
+            && release_key != current.last_notified_version;
+        if should_notify {
+            if let Some(tray) = app.tray_by_id("main-tray") {
+                let _ = tray.set_tooltip(Some("BMS-IR Arena の更新があります"));
+            }
+            let _ = app.emit("arena-background-update-available", info.clone());
+            current.last_notified_version = release_key;
+        }
+    }
+    let _ = settings::save_settings(&root, &current);
+}
+
+fn show_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+fn hide_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        let _ = window.hide();
+    }
+}
+
+fn build_tray(app: &tauri::App) -> tauri::Result<()> {
+    let open_item = MenuItem::with_id(app, "open", "開く / Open", true, None::<&str>)?;
+    let launch_item = MenuItem::with_id(
+        app,
+        "launch",
+        "Arenaを起動 / Launch Arena",
+        true,
+        None::<&str>,
+    )?;
+    let check_item = MenuItem::with_id(
+        app,
+        "check",
+        "更新を確認 / Check for updates",
+        true,
+        None::<&str>,
+    )?;
+    let quit_item = MenuItem::with_id(app, "quit", "終了 / Quit", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&open_item, &launch_item, &check_item, &quit_item])?;
+    let mut builder = TrayIconBuilder::with_id("main-tray")
+        .menu(&menu)
+        .show_menu_on_left_click(true)
+        .tooltip("BMS-IR Arena");
+    if let Some(icon) = app.default_window_icon() {
+        builder = builder.icon(icon.clone());
+    }
+    builder
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "open" => show_main_window(app),
+            "launch" => {
+                let _ = launch_game(app.clone(), false);
+            }
+            "check" => {
+                show_main_window(app);
+                let _ = app.emit("arena-tray-check-requested", ());
+            }
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .build(app)?;
+    Ok(())
+}
+
+#[tauri::command]
 fn launch_game(app: AppHandle, configuration: bool) -> Result<install::LaunchInfo, String> {
     let root = install::launcher_install_root().map_err(|error| error.to_string())?;
     let installation = install::inspect(&root).map_err(|error| error.to_string())?;
     update::enforce_cached_launch_policy(&root, install::is_ready(&installation))
         .map_err(|error| error.to_string())?;
-    launch_detected(&app, &root, configuration)
+    let launch = launch_detected(&app, &root, configuration)?;
+    apply_post_launch_behavior(&app, configuration);
+    Ok(launch)
+}
+
+fn apply_post_launch_behavior(app: &AppHandle, configuration: bool) {
+    if configuration {
+        return;
+    }
+    let resident = install::launcher_install_root()
+        .map(|root| settings::load_settings(&root).resident)
+        .unwrap_or(false);
+    if resident {
+        hide_main_window(app);
+    } else {
+        app.exit(0);
+    }
 }
 
 fn launch_detected(
@@ -260,6 +423,10 @@ pub fn run() {
         install::cleanup_stale_update_state(&root);
     }
     tauri::Builder::default()
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec![]),
+        ))
         .invoke_handler(tauri::generate_handler![
             launcher_state,
             check_online_update,
@@ -270,8 +437,38 @@ pub fn run() {
             check_plugin_update,
             list_deprecated_plugin_versions,
             install_plugin_version,
+            get_launcher_settings,
+            set_launcher_settings,
             launch_game
         ])
+        .on_window_event(|window, event| {
+            if window.label() != MAIN_WINDOW_LABEL {
+                return;
+            }
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                let resident = install::launcher_install_root()
+                    .map(|root| settings::load_settings(&root).resident)
+                    .unwrap_or(false);
+                if resident {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
+        .setup(|app| {
+            build_tray(app)?;
+            spawn_background_check_loop(app.handle().clone());
+            if env::args_os()
+                .any(|argument| argument == std::ffi::OsStr::new("--launch-after-update"))
+            {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_millis(300));
+                    let _ = launch_game(handle, false);
+                });
+            }
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("BMS-IR Arena Launcher failed");
 }
@@ -308,14 +505,29 @@ pub fn run_self_update_helper_if_requested() -> bool {
             .next()
             .ok_or_else(|| "self-update launcher path is missing".to_string())?;
         let remaining = arguments.collect::<Vec<_>>();
-        let (bootstrap_install, launch_after) = match remaining.as_slice() {
-            [launch_after] => (false, launch_after == std::ffi::OsStr::new("1")),
-            [bootstrap, launch_after] => (
-                bootstrap == std::ffi::OsStr::new("1"),
-                launch_after == std::ffi::OsStr::new("1"),
-            ),
-            _ => return Err("unexpected self-update arguments".to_string()),
-        };
+        let (bootstrap_install, target, writes_body_version, launch_after) =
+            match remaining.as_slice() {
+                [launch_after] => (
+                    false,
+                    update::UpdateTarget::All,
+                    true,
+                    launch_after == std::ffi::OsStr::new("1"),
+                ),
+                [bootstrap, launch_after] => (
+                    bootstrap == std::ffi::OsStr::new("1"),
+                    update::UpdateTarget::All,
+                    true,
+                    launch_after == std::ffi::OsStr::new("1"),
+                ),
+                [bootstrap, target, writes_body_version, launch_after] => (
+                    bootstrap == std::ffi::OsStr::new("1"),
+                    update::UpdateTarget::from_argument(&target.to_string_lossy())
+                        .ok_or_else(|| "invalid self-update target".to_string())?,
+                    writes_body_version == std::ffi::OsStr::new("1"),
+                    launch_after == std::ffi::OsStr::new("1"),
+                ),
+                _ => return Err("unexpected self-update arguments".to_string()),
+            };
         let manifest_path_text = manifest_path.to_string_lossy();
         let release = load_verified_manifest(&manifest_path_text)?;
         let launcher_path_text = launcher_path.to_string_lossy();
@@ -332,6 +544,8 @@ pub fn run_self_update_helper_if_requested() -> bool {
             &release,
             &launcher_path_text,
             bootstrap_install,
+            target,
+            writes_body_version,
             launch_after,
         )
         .map_err(|error| error.to_string())

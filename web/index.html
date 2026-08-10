@@ -9,28 +9,43 @@
 <body>
 <main>
   <header>
-    <h1>BMS-IR Arena</h1>
-    <button id="language" class="quiet language-button" type="button" aria-label="英語に切り替え" title="英語に切り替え">
-      <span class="language-icon" aria-hidden="true">&#127760;</span>
-      <span id="language-label">日本語</span>
-    </button>
+    <div>
+      <h1>BMS-IR Arena</h1>
+      <p data-i18n="subtitle">アップデートと起動</p>
+    </div>
+    <div class="header-actions">
+      <button id="resident-state" class="resident-state quiet" type="button" aria-pressed="false">
+        <span class="resident-dot" aria-hidden="true"></span>
+        <span id="resident-label">常駐 OFF</span>
+      </button>
+      <button id="settings-open" class="quiet icon-button" type="button" data-i18n-aria-label="settingsOpen" aria-label="設定" title="設定">&#9881;</button>
+      <button id="language" class="quiet language-button" type="button" aria-label="英語に切り替え" title="英語に切り替え">
+        <span aria-hidden="true">&#127760;</span><span id="language-label">日本語</span>
+      </button>
+    </div>
   </header>
 
   <section class="status-cards" aria-live="polite">
-    <div class="status-card">
+    <article class="status-card">
       <div>
         <p class="status-card-label" data-i18n="statusBody">本体</p>
         <p id="body-version-line" class="status-card-version">…</p>
       </div>
-      <span id="body-badge" class="status-badge" data-kind="neutral"></span>
-    </div>
-    <div class="status-card">
+      <div class="card-action">
+        <span id="body-badge" class="status-badge" data-kind="neutral"></span>
+        <button id="body-update" class="small-button" type="button" hidden data-i18n="updateBody">本体を更新</button>
+      </div>
+    </article>
+    <article class="status-card">
       <div>
         <p class="status-card-label" data-i18n="statusLauncher">ランチャー</p>
         <p id="launcher-version-line" class="status-card-version">…</p>
       </div>
-      <span id="launcher-badge" class="status-badge" data-kind="neutral"></span>
-    </div>
+      <div class="card-action">
+        <span id="launcher-badge" class="status-badge" data-kind="neutral"></span>
+        <button id="launcher-update" class="small-button" type="button" hidden data-i18n="updateLauncher">ランチャーを更新</button>
+      </div>
+    </article>
   </section>
 
   <section class="status-band" aria-live="polite">
@@ -39,45 +54,34 @@
       <strong id="update-status" data-i18n="checking">更新を確認しています</strong>
       <p id="installation-status"></p>
       <div id="update-progress" class="update-progress" hidden>
-        <div class="progress-heading">
-          <span id="progress-label"></span>
-          <strong id="progress-percent">0%</strong>
-        </div>
+        <div class="progress-heading"><span id="progress-label"></span><strong id="progress-percent">0%</strong></div>
         <progress id="progress-bar" max="100" value="0">0%</progress>
         <p id="progress-detail"></p>
       </div>
     </div>
   </section>
 
-  <section class="actions" aria-label="Launch actions">
-    <button id="play" class="primary" type="button" disabled data-i18n="play">Arenaを起動</button>
+  <section id="primary-actions" class="actions primary-actions" aria-label="Primary actions">
+    <button id="release-notes-open" type="button" data-i18n="releaseNotesOpen">更新内容を見る</button>
     <button id="configure" type="button" disabled data-i18n="configure">起動前コンフィグ</button>
-    <button id="check" class="quiet" type="button" data-i18n="check">更新を確認</button>
+    <button id="play" class="primary" type="button" disabled data-i18n="play">Arenaを起動</button>
+    <button id="update-all" class="primary" type="button" hidden data-i18n="updateAll">すべて更新</button>
+    <button id="launch-current" type="button" hidden data-i18n="launchCurrent">現在の版で起動</button>
   </section>
 
   <section class="information" aria-labelledby="information-title">
     <h2 id="information-title" data-i18n="information">お知らせ</h2>
-    <ul id="announcements" aria-live="polite">
-      <li class="empty-information" data-i18n="noInformation">現在のお知らせはありません</li>
-    </ul>
+    <ul id="announcements" aria-live="polite"><li class="empty-information" data-i18n="noInformation">現在のお知らせはありません</li></ul>
   </section>
 
-  <section id="update-panel" class="update-panel" hidden>
-    <h2 id="available-title"></h2>
-    <p id="available-published-at" class="published-at"></p>
-    <details id="release-notes-details">
-      <summary data-i18n="releaseNotesToggle">リリースノートを見る</summary>
-      <div id="release-notes" class="notes"></div>
-    </details>
-    <div id="update-actions" class="actions">
-      <button id="update-launch" class="primary" type="button" data-i18n="updateLaunch">更新して起動</button>
-      <button id="launch-current" type="button" data-i18n="launchCurrent">現在の版を起動</button>
-    </div>
+  <section class="secondary-actions">
+    <button id="check" class="quiet" type="button" data-i18n="check">更新を確認</button>
   </section>
 
   <section class="deprecated-panel">
-    <button id="deprecated-toggle" class="quiet" type="button" data-i18n="deprecatedToggle" aria-expanded="false" aria-controls="deprecated-list-container">非推奨版から選択</button>
+    <button id="deprecated-toggle" class="quiet" type="button" data-i18n="deprecatedToggle" aria-expanded="false" aria-controls="deprecated-list-container">非推奨版をダウンロード</button>
     <div id="deprecated-list-container" hidden>
+      <p id="deprecated-warning" class="warning-copy" data-i18n="deprecatedWarning">非推奨版はサポート対象外です。本体だけを切り替え、設定やスコアは変更しません。</p>
       <p id="deprecated-loading" class="empty-information" hidden data-i18n="deprecatedLoading">読み込んでいます…</p>
       <p id="deprecated-empty" class="empty-information" hidden data-i18n="deprecatedEmpty">非推奨版はありません</p>
       <ul id="deprecated-list" aria-live="polite"></ul>
@@ -85,18 +89,36 @@
   </section>
 
   <section class="deprecated-panel">
-    <button id="plugin-toggle" class="quiet" type="button" data-i18n="pluginToggle" aria-expanded="false" aria-controls="plugin-list-container">Arenaプラグイン</button>
+    <button id="plugin-toggle" class="quiet" type="button" data-i18n="pluginToggle" aria-expanded="false" aria-controls="plugin-list-container">Arenaプラグインの更新・旧版</button>
     <div id="plugin-list-container" hidden>
       <p id="plugin-current" class="empty-information"></p>
       <ul id="plugin-list" aria-live="polite"></ul>
     </div>
   </section>
 
-  <details id="details" hidden>
-    <summary data-i18n="details">詳細</summary>
-    <pre id="error-detail"></pre>
-  </details>
+  <details id="details" hidden><summary data-i18n="details">詳細</summary><pre id="error-detail"></pre></details>
 </main>
+
+<dialog id="release-dialog" class="modal">
+  <div class="modal-heading">
+    <div><h2 id="release-dialog-title"></h2><p id="available-published-at" class="published-at"></p></div>
+    <button id="release-dialog-close" class="quiet icon-button" type="button" aria-label="閉じる">&times;</button>
+  </div>
+  <div id="release-notes" class="notes"></div>
+</dialog>
+
+<dialog id="settings-dialog" class="modal">
+  <div class="modal-heading">
+    <div><h2 data-i18n="settingsTitle">ランチャー設定</h2><p data-i18n="settingsDescription">変更はすぐに保存されます</p></div>
+    <button id="settings-close" class="quiet icon-button" type="button" aria-label="閉じる">&times;</button>
+  </div>
+  <div class="settings-list">
+    <label class="settings-row"><span><strong data-i18n="settingsResident">常駐（トレイ）</strong><small data-i18n="settingsResidentHint">Arena起動後やウィンドウを閉じた後も常駐します</small></span><input id="setting-resident" type="checkbox"></label>
+    <label class="settings-row"><span><strong data-i18n="settingsBackgroundCheck">バックグラウンド更新確認</strong><small data-i18n="settingsBackgroundCheckHint">1日1回確認し、トレイに更新を表示します</small></span><input id="setting-background-check" type="checkbox"></label>
+    <label class="settings-row"><span><strong data-i18n="settingsAutostart">ログイン時に起動</strong><small data-i18n="settingsAutostartHint">常駐がONのときに利用できます</small></span><input id="setting-autostart" type="checkbox"></label>
+  </div>
+</dialog>
+
 <script type="module" src="main.js"></script>
 </body>
 </html>

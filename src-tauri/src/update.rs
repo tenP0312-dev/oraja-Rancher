@@ -3,7 +3,7 @@ use crate::manifest::{
     verify_file, verify_history, verify_manifest, HistoryEntry, ReleaseAnnouncement,
     ReleaseArtifact, ReleaseBootstrap, ReleaseManifest,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -68,6 +68,8 @@ pub enum UpdateError {
     DowngradeInstallationNotReady,
     #[error("the selected release does not contain the game JAR")]
     DowngradeArtifactMissing,
+    #[error("the selected component has no available update")]
+    SelectedComponentCurrent,
     #[error(transparent)]
     Manifest(#[from] crate::manifest::ManifestError),
     #[error(transparent)]
@@ -82,6 +84,10 @@ pub struct UpdateInfo {
     pub platform: String,
     pub installed_version: String,
     pub available_version: String,
+    pub installed_launcher_version: String,
+    pub available_launcher_version: String,
+    pub body_update_available: bool,
+    pub launcher_update_available: bool,
     pub available_published_at: String,
     pub status: String,
     pub mandatory: bool,
@@ -89,6 +95,41 @@ pub struct UpdateInfo {
     pub release_notes_markdown_ja: String,
     pub release_notes_markdown_en: String,
     pub announcements: Vec<ReleaseAnnouncement>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateTarget {
+    All,
+    Body,
+    Launcher,
+}
+
+impl UpdateTarget {
+    pub fn from_argument(value: &str) -> Option<Self> {
+        match value {
+            "all" => Some(Self::All),
+            "body" => Some(Self::Body),
+            "launcher" => Some(Self::Launcher),
+            _ => None,
+        }
+    }
+
+    pub fn includes_body(self) -> bool {
+        matches!(self, Self::All | Self::Body)
+    }
+
+    pub fn as_argument(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Body => "body",
+            Self::Launcher => "launcher",
+        }
+    }
+
+    fn as_directory_name(self) -> &'static str {
+        self.as_argument()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -99,6 +140,8 @@ pub struct PreparedUpdate {
     pub bootstrap_install: bool,
     pub transfer_bytes_total: u64,
     pub verified_files_total: u64,
+    pub target: UpdateTarget,
+    pub writes_body_version: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -435,6 +478,59 @@ fn release_contains_game_jar(manifest: &ReleaseManifest) -> bool {
         .artifacts
         .iter()
         .any(|artifact| artifact.path.eq_ignore_ascii_case(CANONICAL_GAME_JAR))
+}
+
+fn is_launcher_artifact(manifest: &ReleaseManifest, artifact: &ReleaseArtifact) -> bool {
+    let path = artifact.path.to_ascii_lowercase();
+    match (manifest.platform.as_str(), manifest.channel.as_str()) {
+        ("windows-x64", "stable") => !path.contains('/') && path == "bms-ir arena.exe",
+        ("windows-x64", "test") => !path.contains('/') && path == "bms-ir arena test.exe",
+        ("macos-arm64", "stable") => path.starts_with("bms-ir arena.app/"),
+        ("macos-arm64", "test") => path.starts_with("bms-ir arena test.app/"),
+        _ => false,
+    }
+}
+
+fn release_contains_launcher(manifest: &ReleaseManifest) -> bool {
+    manifest.artifacts.iter().any(|artifact| {
+        let path = artifact.path.to_ascii_lowercase();
+        is_launcher_artifact(manifest, artifact)
+            && if manifest.platform == "windows-x64" {
+                path.ends_with(".exe")
+            } else {
+                path.ends_with("/contents/macos/bmsir-arena-launcher")
+            }
+    })
+}
+
+/// Produces a trusted component view only after the complete signed manifest
+/// has been verified. The WebView chooses a component name, never file paths.
+pub fn release_for_target(
+    manifest: &ReleaseManifest,
+    target: UpdateTarget,
+) -> Result<ReleaseManifest, UpdateError> {
+    if target == UpdateTarget::All {
+        return Ok(manifest.clone());
+    }
+    let mut selected = manifest.clone();
+    selected.bootstrap = None;
+    selected.artifacts = manifest
+        .artifacts
+        .iter()
+        .filter(|artifact| {
+            let launcher = is_launcher_artifact(manifest, artifact);
+            match target {
+                UpdateTarget::All => true,
+                UpdateTarget::Body => !launcher,
+                UpdateTarget::Launcher => launcher,
+            }
+        })
+        .cloned()
+        .collect();
+    if selected.artifacts.is_empty() {
+        return Err(UpdateError::SelectedComponentCurrent);
+    }
+    Ok(selected)
 }
 
 fn release_plugin_artifact(manifest: &ReleaseManifest) -> Option<&ReleaseArtifact> {
@@ -832,6 +928,7 @@ fn status_for_versions(
     installation_ready: bool,
     revoked: bool,
     launcher_old: bool,
+    launcher_update_available: bool,
 ) -> Result<&'static str, UpdateError> {
     let version_order = compare_versions(installed, available);
     if revoked {
@@ -850,11 +947,14 @@ fn status_for_versions(
     }
     Ok(if version_order == Ordering::Less {
         "available"
+    } else if launcher_update_available {
+        "launcher_available"
     } else {
         "current"
     })
 }
 
+#[cfg(test)]
 fn bootstrap_allowed_for_versions(
     installed: &str,
     available: &str,
@@ -879,12 +979,28 @@ fn update_info_from_release(
         .any(|value| value == &installed);
     let launcher_old =
         compare_versions(launcher_version, &release.minimum_launcher_version) == Ordering::Less;
+    let declared_launcher_version = release.launcher_version.trim();
+    let launcher_update_available = release_contains_launcher(release)
+        && ((!declared_launcher_version.is_empty()
+            && compare_versions(launcher_version, declared_launcher_version) == Ordering::Less)
+            || launcher_old);
+    let available_launcher_version = if !declared_launcher_version.is_empty() {
+        declared_launcher_version.to_string()
+    } else if launcher_old {
+        release.minimum_launcher_version.clone()
+    } else {
+        launcher_version.to_string()
+    };
+    let body_update_available = !installation_ready
+        || revoked
+        || compare_versions(&installed, &release.version) == Ordering::Less;
     let status = status_for_versions(
         &installed,
         &release.version,
         installation_ready,
         revoked,
         launcher_old,
+        launcher_update_available,
     )?;
     let release_notes_markdown_ja = if release.release_notes_markdown_ja.is_empty() {
         release.release_notes_markdown.clone()
@@ -901,6 +1017,10 @@ fn update_info_from_release(
         platform: release.platform.clone(),
         installed_version: installed,
         available_version: release.version.clone(),
+        installed_launcher_version: launcher_version.to_string(),
+        available_launcher_version,
+        body_update_available,
+        launcher_update_available,
         available_published_at: release.published_at.clone(),
         status: status.to_string(),
         mandatory: release.mandatory || revoked || launcher_old,
@@ -915,7 +1035,7 @@ fn update_blocks_launch(update: &UpdateInfo) -> bool {
     matches!(
         update.status.as_str(),
         "install_required" | "revoked" | "launcher_too_old"
-    ) || (update.status == "available" && update.mandatory)
+    ) || (update.mandatory && (update.body_update_available || update.launcher_update_available))
 }
 
 fn cache_verified_release(root: &Path, manifest_json: &str) -> Result<(), UpdateError> {
@@ -1222,6 +1342,7 @@ where
 pub fn prepare_with_progress<F>(
     root: &Path,
     installation_ready: bool,
+    target: UpdateTarget,
     progress: F,
 ) -> Result<PreparedUpdate, UpdateError>
 where
@@ -1235,6 +1356,7 @@ where
         release_public_key()?,
         &selected_channel,
         platform(),
+        target,
         progress,
     )
 }
@@ -1246,6 +1368,7 @@ fn prepare_from_with_progress<F>(
     public_key: &str,
     selected_channel: &str,
     selected_platform: &str,
+    target: UpdateTarget,
     mut progress: F,
 ) -> Result<PreparedUpdate, UpdateError>
 where
@@ -1257,25 +1380,44 @@ where
     if !installation_ready && !bootstrap_artifacts_present(&release) {
         return Err(UpdateError::IncompleteBootstrap);
     }
+    if !installation_ready && target != UpdateTarget::All {
+        return Err(UpdateError::IncompleteBootstrap);
+    }
     let installed = installed_version(&root);
     let revoked = release
         .revoked_versions
         .iter()
         .any(|value| value == &installed);
-    let version_order = compare_versions(&installed, &release.version);
-    let bootstrap_allowed =
-        bootstrap_allowed_for_versions(&installed, &release.version, installation_ready, revoked);
-    if version_order != Ordering::Less && !bootstrap_allowed {
-        return Err(UpdateError::Request(
-            "no newer release is available".to_string(),
-        ));
+    let launcher_old =
+        compare_versions(env!("CARGO_PKG_VERSION"), &release.minimum_launcher_version)
+            == Ordering::Less;
+    let launcher_update_available = release_contains_launcher(&release)
+        && ((!release.launcher_version.trim().is_empty()
+            && compare_versions(env!("CARGO_PKG_VERSION"), &release.launcher_version)
+                == Ordering::Less)
+            || launcher_old);
+    let body_update_available = !installation_ready
+        || revoked
+        || compare_versions(&installed, &release.version) == Ordering::Less;
+    let target_available = match target {
+        UpdateTarget::All => body_update_available || launcher_update_available,
+        UpdateTarget::Body => body_update_available,
+        UpdateTarget::Launcher => launcher_update_available,
+    };
+    if !target_available {
+        return Err(UpdateError::SelectedComponentCurrent);
     }
+    let selected_release = release_for_target(&release, target)?;
     let staging_parent = root.join(STAGING_DIRECTORY);
     if staging_parent.exists() && staging_parent.symlink_metadata()?.file_type().is_symlink() {
         return Err(UpdateError::UnsafeStaging);
     }
     fs::create_dir_all(&staging_parent)?;
-    let staging = staging_parent.join(&release.version);
+    let staging = staging_parent.join(format!(
+        "{}-{}",
+        release.version,
+        target.as_directory_name()
+    ));
     if staging.exists() {
         if staging.symlink_metadata()?.file_type().is_symlink() {
             return Err(UpdateError::UnsafeStaging);
@@ -1286,18 +1428,18 @@ where
 
     let bootstrap_install = !installation_ready;
     let bootstrap = if bootstrap_install {
-        release.bootstrap.as_ref()
+        selected_release.bootstrap.as_ref()
     } else {
         None
     };
     let download_artifacts = if bootstrap.is_some() {
-        bootstrap_delta_artifacts(&release)
+        bootstrap_delta_artifacts(&selected_release)
             .into_iter()
             .collect::<Vec<_>>()
     } else if bootstrap_install {
-        release.artifacts.clone()
+        selected_release.artifacts.clone()
     } else {
-        release
+        selected_release
             .artifacts
             .iter()
             .filter(|artifact| !artifact_matches(&root, artifact))
@@ -1361,10 +1503,10 @@ where
         let segments: Vec<&str> = artifact.path.split('/').collect();
         let mut url_segments = vec![
             "channels",
-            release.channel.as_str(),
-            release.platform.as_str(),
+            selected_release.channel.as_str(),
+            selected_release.platform.as_str(),
             "releases",
-            release.version.as_str(),
+            selected_release.version.as_str(),
         ];
         url_segments.extend(segments);
         let url = append_url(base_url, &url_segments)?;
@@ -1391,14 +1533,16 @@ where
     }
     let manifest_path = staging.join(STAGED_MANIFEST);
     fs::write(&manifest_path, manifest_json)?;
-    let verified_files_total = effective_file_count(&release, bootstrap_install);
+    let verified_files_total = effective_file_count(&selected_release, bootstrap_install);
     Ok(PreparedUpdate {
-        manifest: release,
+        manifest: selected_release,
         staging,
         manifest_path,
         bootstrap_install,
         transfer_bytes_total: bytes_total,
         verified_files_total,
+        target,
+        writes_body_version: target.includes_body() && body_update_available,
     })
 }
 
@@ -1482,7 +1626,7 @@ mod tests {
     #[test]
     fn missing_installation_can_bootstrap_the_same_version() {
         assert_eq!(
-            status_for_versions("0.4.14", "0.4.14", false, false, false).unwrap(),
+            status_for_versions("0.4.14", "0.4.14", false, false, false, false).unwrap(),
             "install_required"
         );
         assert!(bootstrap_allowed_for_versions(
@@ -1510,6 +1654,7 @@ mod tests {
             announcements: vec![],
             mandatory: false,
             minimum_launcher_version: "0.2.1".into(),
+            launcher_version: String::new(),
             revoked_versions: vec![],
             bootstrap: None,
             artifacts: vec![
@@ -1545,6 +1690,7 @@ mod tests {
             announcements: vec![],
             mandatory: false,
             minimum_launcher_version: "0.2.1".into(),
+            launcher_version: String::new(),
             revoked_versions: vec![],
             bootstrap: None,
             artifacts: vec![
@@ -1560,9 +1706,62 @@ mod tests {
     }
 
     #[test]
+    fn launcher_update_is_independent_and_component_paths_are_selected_in_rust() {
+        let artifact = |path: &str| ReleaseArtifact {
+            path: path.into(),
+            sha256: "00".repeat(32),
+            size: 1,
+            executable: path.ends_with("bmsir-arena-launcher"),
+        };
+        let release = ReleaseManifest {
+            schema_version: 1,
+            channel: "test".into(),
+            platform: "macos-arm64".into(),
+            version: "0.4.14.25".into(),
+            published_at: "2026-08-10T00:00:00Z".into(),
+            release_notes_markdown: String::new(),
+            release_notes_markdown_ja: String::new(),
+            release_notes_markdown_en: String::new(),
+            announcements: vec![],
+            mandatory: false,
+            minimum_launcher_version: "0.2.17".into(),
+            launcher_version: "0.2.20".into(),
+            revoked_versions: vec![],
+            bootstrap: None,
+            artifacts: vec![
+                artifact("Arena-oraja.jar"),
+                artifact("ir/bms_ir_arena.jar"),
+                artifact("BMS-IR Arena Test.app/Contents/Info.plist"),
+                artifact("BMS-IR Arena Test.app/Contents/MacOS/bmsir-arena-launcher"),
+            ],
+            signature: String::new(),
+        };
+        let update =
+            update_info_from_release("0.4.14.25".into(), true, "0.2.17", &release).unwrap();
+        assert!(!update.body_update_available);
+        assert!(update.launcher_update_available);
+        assert_eq!(update.status, "launcher_available");
+
+        let launcher = release_for_target(&release, UpdateTarget::Launcher).unwrap();
+        assert_eq!(launcher.artifacts.len(), 2);
+        assert!(launcher
+            .artifacts
+            .iter()
+            .all(|item| item.path.contains(".app/")));
+        let body = release_for_target(&release, UpdateTarget::Body).unwrap();
+        assert_eq!(
+            body.artifacts
+                .iter()
+                .map(|item| item.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Arena-oraja.jar", "ir/bms_ir_arena.jar"]
+        );
+    }
+
+    #[test]
     fn complete_installation_keeps_normal_version_rules() {
         assert_eq!(
-            status_for_versions("0.4.14", "0.4.14", true, false, false).unwrap(),
+            status_for_versions("0.4.14", "0.4.14", true, false, false, false).unwrap(),
             "current"
         );
         assert!(!bootstrap_allowed_for_versions(
@@ -1572,7 +1771,7 @@ mod tests {
 
     #[test]
     fn incomplete_newer_installation_does_not_silently_downgrade() {
-        assert!(status_for_versions("0.4.15", "0.4.14", false, false, false).is_err());
+        assert!(status_for_versions("0.4.15", "0.4.14", false, false, false, false).is_err());
         assert!(!bootstrap_allowed_for_versions(
             "0.4.15", "0.4.14", false, false
         ));
@@ -1660,6 +1859,7 @@ mod tests {
             announcements: vec![],
             mandatory: false,
             minimum_launcher_version: "0.2.0".into(),
+            launcher_version: String::new(),
             revoked_versions: vec![],
             bootstrap: None,
             artifacts: vec![],
@@ -1742,6 +1942,7 @@ mod tests {
             &STANDARD.encode(signing.verifying_key().to_bytes()),
             "test",
             "windows-x64",
+            UpdateTarget::All,
             |_| {},
         )
         .unwrap();
@@ -1888,6 +2089,7 @@ mod tests {
             &STANDARD.encode(signing.verifying_key().to_bytes()),
             "test",
             "windows-x64",
+            UpdateTarget::All,
             |event| progress.push(event),
         )
         .unwrap();
@@ -2969,6 +3171,7 @@ mod tests {
             announcements: vec![],
             mandatory: false,
             minimum_launcher_version: "0.2.0".into(),
+            launcher_version: String::new(),
             revoked_versions: vec![],
             bootstrap: None,
             artifacts: vec![artifact("ir/bms_ir_arena.jar")],
