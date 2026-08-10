@@ -60,6 +60,8 @@ pub struct ReleaseManifest {
     #[serde(default)]
     pub minimum_launcher_version: String,
     #[serde(default)]
+    pub launcher_version: String,
+    #[serde(default)]
     pub revoked_versions: Vec<String>,
     #[serde(default)]
     pub bootstrap: Option<ReleaseBootstrap>,
@@ -126,6 +128,11 @@ pub fn verify_manifest(
         return Err(ManifestError::Schema);
     }
     validate_artifacts(&manifest.artifacts)?;
+    if !manifest.launcher_version.is_empty()
+        && (!valid_version(&manifest.launcher_version) || !contains_platform_launcher(&manifest))
+    {
+        return Err(ManifestError::Schema);
+    }
     if let Some(bootstrap) = &manifest.bootstrap {
         let url = Url::parse(&bootstrap.url).map_err(|_| ManifestError::Schema)?;
         if url.scheme() != "https"
@@ -149,6 +156,41 @@ pub fn verify_manifest(
 
     verify_canonical_signature(input, public_key_base64, &manifest.signature)?;
     Ok(manifest)
+}
+
+fn valid_version(value: &str) -> bool {
+    let (main, suffix) = value.split_once('-').unwrap_or((value, ""));
+    !main.is_empty()
+        && main.split('.').count() >= 2
+        && main
+            .split('.')
+            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+        && (suffix.is_empty()
+            || (suffix
+                .bytes()
+                .next()
+                .is_some_and(|byte| byte.is_ascii_alphanumeric())
+                && suffix
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))))
+}
+
+fn contains_platform_launcher(manifest: &ReleaseManifest) -> bool {
+    let expected = match (manifest.platform.as_str(), manifest.channel.as_str()) {
+        ("windows-x64", "stable") => "bms-ir arena.exe",
+        ("windows-x64", "test") => "bms-ir arena test.exe",
+        ("macos-arm64", "stable") => "bms-ir arena.app/contents/macos/bmsir-arena-launcher",
+        ("macos-arm64", "test") => "bms-ir arena test.app/contents/macos/bmsir-arena-launcher",
+        _ => return false,
+    };
+    manifest.artifacts.iter().any(|artifact| {
+        let path = artifact.path.to_ascii_lowercase();
+        match manifest.platform.as_str() {
+            "windows-x64" => !path.contains('/') && path == expected,
+            "macos-arm64" => path == expected,
+            _ => false,
+        }
+    })
 }
 
 /// Verifies an Ed25519 signature over the RFC 8785 canonical form of `input`
@@ -301,6 +343,7 @@ pub fn validate_artifacts(artifacts: &[ReleaseArtifact]) -> Result<(), ManifestE
                     | "bmsir-arena-version.txt"
                     | ".bmsir-launcher-policy.json"
                     | ".bmsir-launcher-policy.tmp"
+                    | ".bmsir-launcher-settings.json"
             );
         if artifact.path.is_empty()
             || artifact.path.contains('\\')
@@ -400,6 +443,46 @@ mod tests {
     }
 
     #[test]
+    fn launcher_version_is_signed_and_requires_platform_launcher() {
+        let signing = SigningKey::from_bytes(&[9_u8; 32]);
+        let mut value = json!({
+            "schema_version": 1,
+            "channel": "test",
+            "platform": "windows-x64",
+            "version": "0.4.14.26",
+            "launcher_version": "0.2.20",
+            "published_at": "2026-08-10T00:00:00Z",
+            "mandatory": false,
+            "minimum_launcher_version": "0.2.17",
+            "revoked_versions": [],
+            "bootstrap": null,
+            "artifacts": [{
+                "path": "BMS-IR Arena Test.exe",
+                "sha256": "00".repeat(32),
+                "size": 1,
+                "executable": true
+            }]
+        });
+        let signature = signing.sign(&serde_jcs::to_vec(&value).unwrap());
+        value["signature"] = Value::String(STANDARD.encode(signature.to_bytes()));
+        let input = serde_json::to_string(&value).unwrap();
+        let key = STANDARD.encode(signing.verifying_key().to_bytes());
+        assert_eq!(
+            verify_manifest(&input, &key).unwrap().launcher_version,
+            "0.2.20"
+        );
+
+        value.as_object_mut().unwrap().remove("signature");
+        value["artifacts"][0]["path"] = Value::String("Arena-oraja.jar".into());
+        let signature = signing.sign(&serde_jcs::to_vec(&value).unwrap());
+        value["signature"] = Value::String(STANDARD.encode(signature.to_bytes()));
+        assert!(matches!(
+            verify_manifest(&serde_json::to_string(&value).unwrap(), &key),
+            Err(ManifestError::Schema)
+        ));
+    }
+
+    #[test]
     fn validates_localized_notes_and_announcements() {
         let signing = SigningKey::from_bytes(&[7_u8; 32]);
         let mut value = json!({
@@ -482,6 +565,16 @@ mod tests {
         };
         assert!(matches!(
             validate_artifacts(&[mutable]),
+            Err(ManifestError::UnsafePath(_))
+        ));
+        let settings = ReleaseArtifact {
+            path: ".bmsir-launcher-settings.json".into(),
+            sha256: "00".repeat(32),
+            size: 0,
+            executable: false,
+        };
+        assert!(matches!(
+            validate_artifacts(&[settings]),
             Err(ManifestError::UnsafePath(_))
         ));
     }

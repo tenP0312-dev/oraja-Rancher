@@ -4,7 +4,9 @@ const listen = window.__TAURI__?.event?.listen;
 const dictionary = {
   ja: {
     checking: "更新を確認しています",
-    current: "最新です",
+    current: "すべて最新です",
+    allCurrentDescription: "本体とランチャーは最新の状態です",
+    updatesAvailable: "更新があります",
     unavailable: "更新を確認できませんでした。現在の本体は起動できます",
     unavailableNoInstall: "セットアップファイルを取得できませんでした",
     invalid: "本体JAR、Java 21以上、またはArenaプラグインを確認できません",
@@ -13,6 +15,9 @@ const dictionary = {
     play: "Arenaを起動",
     configure: "起動前コンフィグ",
     check: "更新を確認",
+    updateAll: "すべて更新",
+    updateBody: "本体を更新",
+    updateLauncher: "ランチャーを更新",
     updateLaunch: "更新して起動",
     installLaunch: "ダウンロードして起動",
     launchCurrent: "現在の版を起動",
@@ -44,7 +49,7 @@ const dictionary = {
     exitCode: "終了コード",
     exitCodeUnavailable: "取得できません",
     launchLog: "診断ログ",
-    deprecatedToggle: "非推奨版から選択",
+    deprecatedToggle: "非推奨版をダウンロード",
     deprecatedHide: "非推奨版一覧を閉じる",
     deprecatedLoading: "読み込んでいます…",
     deprecatedEmpty: "非推奨版はありません",
@@ -55,6 +60,7 @@ const dictionary = {
     deprecatedKindTest: "(旧テストビルド)",
     deprecatedKindStable: "(旧安定版)",
     releaseNotesToggle: "リリースノートを見る",
+    releaseNotesOpen: "更新内容を見る",
     currentRelease: "現在の本体 {version}",
     noReleaseNotes: "この版のリリースノートはありません",
     statusBody: "本体",
@@ -71,11 +77,27 @@ const dictionary = {
     pluginCurrentOk: "プラグインは最新です",
     pluginInstall: "このプラグインを適用",
     pluginDeprecated: "旧プラグイン版",
-    pluginReleaseVersion: "プラグイン {plugin} / 本体リリース {release}"
+    pluginReleaseVersion: "プラグイン {plugin} / 本体リリース {release}",
+    subtitle: "アップデートと起動",
+    residentOn: "常駐 ON",
+    residentOff: "常駐 OFF",
+    settingsOpen: "設定",
+    settingsTitle: "ランチャー設定",
+    settingsDescription: "変更はすぐに保存されます",
+    settingsResident: "常駐（トレイ）",
+    settingsResidentHint: "Arena起動後やウィンドウを閉じた後も常駐します",
+    settingsBackgroundCheck: "バックグラウンド更新確認",
+    settingsBackgroundCheckHint: "1日1回確認し、トレイに更新を表示します",
+    settingsAutostart: "ログイン時に起動",
+    settingsAutostartHint: "常駐がONのときに利用できます",
+    settingsSaveError: "設定を保存できませんでした",
+    deprecatedWarning: "非推奨版はサポート対象外です。本体だけを切り替え、設定やスコアは変更しません。"
   },
   en: {
     checking: "Checking for updates",
-    current: "Up to date",
+    current: "Everything is up to date",
+    allCurrentDescription: "The game and launcher are both up to date",
+    updatesAvailable: "Updates are available",
     unavailable: "Could not check for updates. The installed version can still launch",
     unavailableNoInstall: "Could not download the setup information",
     invalid: "The game JAR, Java 21+, or Arena plugin could not be found",
@@ -84,6 +106,9 @@ const dictionary = {
     play: "Launch Arena",
     configure: "Pre-launch configuration",
     check: "Check for updates",
+    updateAll: "Update all",
+    updateBody: "Update game",
+    updateLauncher: "Update launcher",
     updateLaunch: "Update and launch",
     installLaunch: "Download and launch",
     launchCurrent: "Launch installed version",
@@ -115,7 +140,7 @@ const dictionary = {
     exitCode: "Exit code",
     exitCodeUnavailable: "Unavailable",
     launchLog: "Diagnostic log",
-    deprecatedToggle: "Choose a deprecated version",
+    deprecatedToggle: "Download a deprecated version",
     deprecatedHide: "Hide deprecated versions",
     deprecatedLoading: "Loading…",
     deprecatedEmpty: "No deprecated versions are available",
@@ -126,6 +151,7 @@ const dictionary = {
     deprecatedKindTest: "(older test build)",
     deprecatedKindStable: "(older stable build)",
     releaseNotesToggle: "View release notes",
+    releaseNotesOpen: "View update details",
     currentRelease: "Installed body {version}",
     noReleaseNotes: "No release notes are available for this version",
     statusBody: "Body",
@@ -142,7 +168,21 @@ const dictionary = {
     pluginCurrentOk: "The plugin is up to date",
     pluginInstall: "Apply this plugin",
     pluginDeprecated: "Older plugin release",
-    pluginReleaseVersion: "Plugin {plugin} / body release {release}"
+    pluginReleaseVersion: "Plugin {plugin} / body release {release}",
+    subtitle: "Updates and launch",
+    residentOn: "Resident ON",
+    residentOff: "Resident OFF",
+    settingsOpen: "Settings",
+    settingsTitle: "Launcher settings",
+    settingsDescription: "Changes are saved immediately",
+    settingsResident: "Tray residency",
+    settingsResidentHint: "Keep running after Arena launches or the window closes",
+    settingsBackgroundCheck: "Background update checks",
+    settingsBackgroundCheckHint: "Check daily and show updates in the tray",
+    settingsAutostart: "Launch at login",
+    settingsAutostartHint: "Available while tray residency is enabled",
+    settingsSaveError: "Could not save settings",
+    deprecatedWarning: "Deprecated versions are unsupported. Only the game body changes; settings and scores are preserved."
   }
 };
 
@@ -162,6 +202,7 @@ let downgradingVersion = null;
 let pluginVisible = false;
 let pluginVersions = null;
 let pluginUpdate = null;
+let launcherSettings = null;
 const deprecatedNotesCache = {};
 const byId = id => document.getElementById(id);
 const tr = key => dictionary[language][key];
@@ -171,6 +212,10 @@ function applyLanguage() {
   document.querySelectorAll("[data-i18n]").forEach(element => {
     element.textContent = tr(element.dataset.i18n);
   });
+  document.querySelectorAll("[data-i18n-aria-label]").forEach(element => {
+    element.setAttribute("aria-label", tr(element.dataset.i18nAriaLabel));
+    element.title = tr(element.dataset.i18nAriaLabel);
+  });
   byId("language-label").textContent = language === "ja" ? "日本語" : "English";
   byId("language").setAttribute("aria-label", tr("switchLanguage"));
   byId("language").title = tr("switchLanguage");
@@ -178,6 +223,47 @@ function applyLanguage() {
   renderProgress();
   renderDeprecated();
   renderPlugins();
+  renderSettings();
+}
+
+function renderSettings() {
+  const resident = Boolean(launcherSettings?.resident);
+  byId("resident-label").textContent = tr(resident ? "residentOn" : "residentOff");
+  byId("resident-state").setAttribute("aria-pressed", String(resident));
+  byId("resident-state").dataset.enabled = String(resident);
+  byId("setting-resident").checked = resident;
+  byId("setting-background-check").checked = Boolean(launcherSettings?.background_check);
+  byId("setting-autostart").checked = Boolean(launcherSettings?.autostart);
+  byId("setting-autostart").disabled = !resident;
+}
+
+async function loadSettings() {
+  try {
+    launcherSettings = await invoke("get_launcher_settings");
+  } catch (error) {
+    launcherSettings = {resident: false, autostart: false, background_check: false};
+    showError(error);
+  }
+  renderSettings();
+}
+
+async function saveSetting(key, value) {
+  if (!launcherSettings) return;
+  launcherSettings[key] = value;
+  if (key === "resident" && !value) launcherSettings.autostart = false;
+  renderSettings();
+  try {
+    launcherSettings = await invoke("set_launcher_settings", {settings: launcherSettings});
+    hideError();
+  } catch (error) {
+    showError(`${tr("settingsSaveError")}\n${error}`);
+    await loadSettings();
+  }
+  renderSettings();
+}
+
+function openDialog(dialog) {
+  if (!dialog.open) dialog.showModal();
 }
 
 function renderPlugins() {
@@ -495,7 +581,7 @@ function updateBlocksLaunch() {
   return update.status === "install_required"
     || update.status === "revoked"
     || update.status === "launcher_too_old"
-    || (update.status === "available" && update.mandatory);
+    || ((update.body_update_available || update.launcher_update_available) && update.mandatory);
 }
 
 function localizedReleaseNotes() {
@@ -536,11 +622,13 @@ function renderStatusCards() {
   const installedVersion = installed ? state.installed_version : tr("notInstalledVersion");
   const bodyLine = byId("body-version-line");
   const bodyBadge = byId("body-badge");
+  const bodyUpdate = Boolean(update?.body_update_available);
+  const launcherUpdate = Boolean(update?.launcher_update_available);
 
   if (checking) {
     bodyLine.textContent = installedVersion;
     setBadge(bodyBadge, "neutral", tr("statusChecking"));
-  } else if (!update || update.status === "current") {
+  } else if (!bodyUpdate) {
     bodyLine.textContent = installedVersion;
     setBadge(bodyBadge, installed ? "ok" : "warning", installed ? tr("statusUpToDate") : tr("statusSetupNeeded"));
   } else {
@@ -549,8 +637,6 @@ function renderStatusCards() {
       : `→ ${update.available_version}`;
     if (update.status === "revoked") {
       setBadge(bodyBadge, "error", tr("statusRevoked"));
-    } else if (update.status === "launcher_too_old") {
-      setBadge(bodyBadge, "error", tr("statusLauncherTooOld"));
     } else if (update.status === "install_required") {
       setBadge(bodyBadge, "warning", tr("statusSetupNeeded"));
     } else if (update.mandatory) {
@@ -560,19 +646,34 @@ function renderStatusCards() {
     }
   }
 
-  byId("launcher-version-line").textContent = state.launcher_version;
-  setBadge(byId("launcher-badge"), "ok", tr("statusUpToDate"));
+  const installedLauncher = update?.installed_launcher_version || state.launcher_version;
+  const availableLauncher = update?.available_launcher_version || installedLauncher;
+  byId("launcher-version-line").textContent = launcherUpdate
+    ? `${installedLauncher} → ${availableLauncher}`
+    : installedLauncher;
+  if (checking) {
+    setBadge(byId("launcher-badge"), "neutral", tr("statusChecking"));
+  } else if (launcherUpdate) {
+    setBadge(
+      byId("launcher-badge"),
+      update?.status === "launcher_too_old" ? "error" : "available",
+      update?.status === "launcher_too_old" ? tr("statusMandatory") : tr("statusUpdateAvailable")
+    );
+  } else {
+    setBadge(byId("launcher-badge"), "ok", tr("statusUpToDate"));
+  }
+  const partialBlocked = updateBlocksLaunch() || update?.status === "install_required";
+  byId("body-update").hidden = !bodyUpdate || !installed || partialBlocked;
+  byId("launcher-update").hidden = !launcherUpdate || partialBlocked;
+  byId("body-update").disabled = checking || installingUpdate;
+  byId("launcher-update").disabled = checking || installingUpdate;
 }
 
 function renderReleasePanel() {
-  const panel = byId("update-panel");
-  if (!update) {
-    panel.hidden = true;
-    return;
-  }
-  const current = update.status === "current";
-  panel.hidden = false;
-  byId("available-title").textContent = current
+  const current = !update?.body_update_available && !update?.launcher_update_available;
+  byId("release-notes-open").disabled = !update;
+  if (!update) return;
+  byId("release-dialog-title").textContent = current
     ? tr("currentRelease").replace("{version}", update.available_version)
     : tr(update.status === "install_required" ? "installAvailable" : "available")
       .replace("{version}", update.available_version);
@@ -580,7 +681,6 @@ function renderReleasePanel() {
   byId("available-published-at").textContent = publishedAt
     ? tr("publishedAt").replace("{datetime}", publishedAt)
     : "";
-  byId("update-actions").hidden = current;
   renderSafeMarkdown(localizedReleaseNotes());
 }
 
@@ -588,10 +688,19 @@ function renderUpdate() {
   if (!state) return;
   const installed = Boolean(state.installation_ready);
   const blocked = updateBlocksLaunch();
-  byId("installation-status").textContent = installed ? tr("ready") : tr("notInstalled");
+  const hasUpdates = Boolean(update?.body_update_available || update?.launcher_update_available);
+  const allCurrent = Boolean(update) && !hasUpdates;
+  byId("installation-status").textContent = allCurrent
+    ? tr("allCurrentDescription")
+    : (installed ? tr("ready") : tr("notInstalled"));
   byId("play").disabled = !canLaunch();
   byId("configure").disabled = !canLaunch();
   byId("check").disabled = checking || installingUpdate || launching;
+  byId("play").hidden = hasUpdates;
+  byId("configure").hidden = hasUpdates;
+  byId("update-all").hidden = !hasUpdates;
+  byId("update-all").disabled = checking || installingUpdate;
+  byId("launch-current").hidden = !hasUpdates || blocked || !installed;
   byId("launch-current").disabled = blocked || !installed || installingUpdate || launching;
   renderStatusCards();
   renderReleasePanel();
@@ -618,25 +727,24 @@ function renderUpdate() {
     return;
   }
 
-  if (update.status === "current") {
+  if (!hasUpdates) {
     setStatus(tr(updateUnavailable ? "unavailable" : "current"), updateUnavailable ? "warning" : "ok");
     return;
   }
   const installing = update.status === "install_required";
-  byId("update-launch").textContent = installing ? tr("installLaunch") : tr("updateLaunch");
-  byId("launch-current").disabled = blocked || !installed || installingUpdate || launching;
-  byId("play").disabled = blocked || !installed || launching;
-  byId("configure").disabled = blocked || !installed || launching;
   if (update.status === "revoked") {
     setStatus(tr("revoked"), "error");
   } else if (update.status === "launcher_too_old") {
     setStatus(tr("launcherOld"), "error");
   } else if (update.mandatory) {
     setStatus(tr("mandatory"), "warning");
-  } else if (installing) {
-    setStatus(byId("available-title").textContent, "available");
   } else {
-    setStatus(byId("available-title").textContent, "available");
+    setStatus(
+      installing
+        ? tr("installAvailable").replace("{version}", update.available_version)
+        : tr("updatesAvailable"),
+      "available"
+    );
   }
 }
 
@@ -729,9 +837,9 @@ function reportLaunchExit(result) {
   }
 }
 
-async function installAndLaunch() {
+async function installSelected(target) {
+  if (installingUpdate) return;
   installingUpdate = true;
-  launching = true;
   latestLaunchExit = null;
   updateProgress = {
     phase: "downloading",
@@ -745,22 +853,19 @@ async function installAndLaunch() {
   renderUpdate();
   renderProgress();
   setStatus(tr(update?.status === "install_required" ? "installing" : "updating"), "available");
-  byId("update-launch").disabled = true;
   try {
-    const result = await invoke("install_online_update", {launchAfter: true});
+    await invoke("install_online_update", {target, launchAfter: false});
     await loadState();
+    if (state) await checkUpdate();
     installingUpdate = false;
     updateProgress = null;
     renderProgress();
     renderUpdate();
-    if (result?.diagnostic) showError(result.diagnostic);
-    reportLaunchExit(latestLaunchExit);
+    hideError();
   } catch (error) {
     installingUpdate = false;
-    launching = false;
     updateProgress = null;
     renderProgress();
-    byId("update-launch").disabled = false;
     showError(error);
     renderUpdate();
   }
@@ -774,10 +879,28 @@ byId("language").addEventListener("click", () => {
 byId("play").addEventListener("click", () => launch(false));
 byId("configure").addEventListener("click", () => launch(true));
 byId("check").addEventListener("click", checkUpdate);
-byId("update-launch").addEventListener("click", installAndLaunch);
+byId("update-all").addEventListener("click", () => installSelected("all"));
+byId("body-update").addEventListener("click", () => installSelected("body"));
+byId("launcher-update").addEventListener("click", () => installSelected("launcher"));
 byId("launch-current").addEventListener("click", () => launch(false));
 byId("deprecated-toggle").addEventListener("click", toggleDeprecated);
 byId("plugin-toggle").addEventListener("click", togglePlugins);
+byId("release-notes-open").addEventListener("click", () => openDialog(byId("release-dialog")));
+byId("release-dialog-close").addEventListener("click", () => byId("release-dialog").close());
+byId("settings-open").addEventListener("click", () => openDialog(byId("settings-dialog")));
+byId("settings-close").addEventListener("click", () => byId("settings-dialog").close());
+byId("resident-state").addEventListener("click", () => saveSetting("resident", !launcherSettings?.resident));
+byId("setting-resident").addEventListener("change", event => saveSetting("resident", event.target.checked));
+byId("setting-background-check").addEventListener("change", event => saveSetting("background_check", event.target.checked));
+byId("setting-autostart").addEventListener("change", event => saveSetting("autostart", event.target.checked));
+[byId("release-dialog"), byId("settings-dialog")].forEach(dialog => {
+  dialog.addEventListener("click", event => {
+    const bounds = dialog.getBoundingClientRect();
+    const inside = event.clientX >= bounds.left && event.clientX <= bounds.right
+      && event.clientY >= bounds.top && event.clientY <= bounds.bottom;
+    if (!inside) dialog.close();
+  });
+});
 
 if (listen) {
   await listen("arena-update-progress", event => {
@@ -792,8 +915,15 @@ if (listen) {
     renderUpdate();
     reportLaunchExit(result);
   });
+  await listen("arena-tray-check-requested", checkUpdate);
+  await listen("arena-background-update-available", event => {
+    update = event.payload;
+    if (state) state.cached_update = update;
+    renderUpdate();
+  });
 }
 
 applyLanguage();
+await loadSettings();
 await loadState();
 if (state) await checkUpdate();
