@@ -46,6 +46,16 @@
         <button id="launcher-update" class="small-button" type="button" hidden data-i18n="updateLauncher">ランチャーを更新</button>
       </div>
     </article>
+    <article class="status-card account-status-card">
+      <div>
+        <p class="status-card-label"><span data-i18n="statusAccount">BMS-IRアカウント</span> <span class="mock-badge">MOCK</span></p>
+        <p id="account-summary" class="status-card-version" data-i18n="accountNotLinked">未連携</p>
+      </div>
+      <div class="card-action">
+        <span id="account-badge" class="status-badge" data-kind="warning" data-i18n="accountSetupNeeded">設定が必要</span>
+        <button id="onboarding-open" class="small-button" type="button" data-i18n="accountSetup">セットアップ</button>
+      </div>
+    </article>
   </section>
 
   <section class="status-band" aria-live="polite">
@@ -116,6 +126,90 @@
     <label class="settings-row"><span><strong data-i18n="settingsResident">常駐（トレイ）</strong><small data-i18n="settingsResidentHint">Arena起動後やウィンドウを閉じた後も常駐します</small></span><input id="setting-resident" type="checkbox"></label>
     <label class="settings-row"><span><strong data-i18n="settingsBackgroundCheck">バックグラウンド更新確認</strong><small data-i18n="settingsBackgroundCheckHint">1日1回確認し、トレイに更新を表示します</small></span><input id="setting-background-check" type="checkbox"></label>
     <label class="settings-row"><span><strong data-i18n="settingsAutostart">ログイン時に起動</strong><small data-i18n="settingsAutostartHint">常駐がONのときに利用できます</small></span><input id="setting-autostart" type="checkbox"></label>
+  </div>
+</dialog>
+
+<dialog id="onboarding-dialog" class="modal onboarding-modal">
+  <div class="modal-heading">
+    <div>
+      <div class="onboarding-title-line"><h2 data-i18n="onboardingTitle">BMS-IRセットアップ</h2><span class="mock-badge">MOCK</span></div>
+      <p data-i18n="onboardingSubtitle">アカウント連携から起動までの操作イメージ</p>
+    </div>
+    <button id="onboarding-close" class="quiet icon-button" type="button" data-i18n-aria-label="close" aria-label="閉じる">&times;</button>
+  </div>
+
+  <div class="onboarding-content">
+    <p class="mock-notice" data-i18n="onboardingMockNotice">このモックはアカウント作成・認証・設定保存・ネットワーク接続を行いません。</p>
+    <div class="onboarding-progress-line"><strong data-i18n="onboardingProgress">セットアップ進行</strong><span id="onboarding-progress-count">0 / 4</span></div>
+    <ol class="onboarding-steps" aria-label="Setup steps">
+      <li data-onboarding-step="account"><span>1</span><strong data-i18n="onboardingStepAccount">アカウント</strong></li>
+      <li data-onboarding-step="profile"><span>2</span><strong data-i18n="onboardingStepProfile">プロファイル</strong></li>
+      <li data-onboarding-step="connection"><span>3</span><strong data-i18n="onboardingStepConnection">接続テスト</strong></li>
+      <li data-onboarding-step="ready"><span>4</span><strong data-i18n="onboardingStepLaunch">起動</strong></li>
+    </ol>
+
+    <section id="onboarding-account" class="onboarding-stage">
+      <h3 data-i18n="onboardingAccountTitle">BMS-IRアカウントを連携</h3>
+      <p data-i18n="onboardingAccountDescription">ブラウザで登録またはログインし、このランチャーとの連携を承認する想定です。</p>
+      <div id="onboarding-account-actions" class="onboarding-actions">
+        <button id="onboarding-new-account" class="primary" type="button" data-i18n="onboardingNewAccount">新規登録を開始</button>
+        <button id="onboarding-existing-account" type="button" data-i18n="onboardingExistingAccount">既存アカウントを連携</button>
+      </div>
+      <div id="onboarding-link-code" class="link-code-panel" hidden>
+        <div>
+          <p class="eyebrow" data-i18n="onboardingBrowserOpened">ブラウザでBMS-IRを開いた想定</p>
+          <strong>M0CK-IR01</strong>
+        </div>
+        <p id="onboarding-link-method"></p>
+        <button id="onboarding-complete-link" class="primary" type="button" data-i18n="onboardingCompleteLink">Web側の登録・承認を完了</button>
+      </div>
+    </section>
+
+    <section id="onboarding-profile" class="onboarding-stage" hidden>
+      <h3 data-i18n="onboardingProfileTitle">ローカルプロファイルへ自動設定</h3>
+      <p data-i18n="onboardingProfileDescription">対象プロファイルを選び、BMS-IRをPrimary IRにしてArena接続を有効化する想定です。</p>
+      <label class="onboarding-field"><span data-i18n="onboardingProfileLabel">対象プロファイル</span>
+        <select id="onboarding-profile-select">
+          <option value="PLAYER">PLAYER</option>
+          <option value="BMSIR">BMSIR</option>
+        </select>
+      </label>
+      <ul class="setup-summary">
+        <li data-i18n="onboardingProfileBackup">既存設定をバックアップ</li>
+        <li data-i18n="onboardingProfilePrimary">BMS-IRをPrimary IRに設定</li>
+        <li data-i18n="onboardingProfileArena">BMS-IR Arena接続を有効化</li>
+      </ul>
+      <div class="onboarding-actions"><button id="onboarding-configure-profile" class="primary" type="button" data-i18n="onboardingConfigureProfile">自動設定を実行</button></div>
+    </section>
+
+    <section id="onboarding-connection" class="onboarding-stage" hidden>
+      <h3 data-i18n="onboardingConnectionTitle">接続状態を確認</h3>
+      <p data-i18n="onboardingConnectionDescription">本番では端末用ゲームトークンでログインとArena接続を検証する想定です。</p>
+      <ul class="connection-checks">
+        <li><span data-i18n="onboardingCheckAccount">BMS-IRログイン</span><strong id="onboarding-check-account"></strong></li>
+        <li><span data-i18n="onboardingCheckPlugin">Arenaプラグイン</span><strong id="onboarding-check-plugin"></strong></li>
+        <li><span data-i18n="onboardingCheckArena">Arenaサーバー</span><strong id="onboarding-check-arena"></strong></li>
+      </ul>
+      <div class="onboarding-actions"><button id="onboarding-test-connection" class="primary" type="button" data-i18n="onboardingTestConnection">接続テストを開始</button></div>
+    </section>
+
+    <section id="onboarding-ready" class="onboarding-stage onboarding-ready" hidden>
+      <div class="ready-mark" aria-hidden="true">&#10003;</div>
+      <h3 data-i18n="onboardingReadyTitle">プレイ準備ができました</h3>
+      <p data-i18n="onboardingReadyDescription">アカウントとローカル設定のモックフローが完了しました。</p>
+      <dl class="ready-summary">
+        <div><dt data-i18n="onboardingReadyAccount">アカウント</dt><dd>BMSIR_MOCK / 19XXXX</dd></div>
+        <div><dt data-i18n="onboardingReadyProfile">プロファイル</dt><dd id="onboarding-ready-profile">PLAYER</dd></div>
+        <div><dt data-i18n="onboardingReadyConnection">接続</dt><dd data-i18n="onboardingMockPassed">OK（モック）</dd></div>
+      </dl>
+      <p id="onboarding-launch-hint" class="launch-hint"></p>
+      <div class="onboarding-actions"><button id="onboarding-launch" class="primary launch-button" type="button" data-i18n="play">Arenaを起動</button></div>
+    </section>
+
+    <div class="onboarding-footer">
+      <button id="onboarding-reset" class="quiet" type="button" data-i18n="onboardingReset">最初から試す</button>
+      <span data-i18n="onboardingSessionOnly">状態はこのランチャー画面だけに保持されます</span>
+    </div>
   </div>
 </dialog>
 

@@ -1,3 +1,11 @@
+import {
+  ONBOARDING_MOCK_STAGES,
+  completedOnboardingMockSteps,
+  createOnboardingMockState,
+  onboardingMockStepState,
+  reduceOnboardingMock
+} from "./onboarding-mock.mjs";
+
 const invoke = window.__TAURI__?.core?.invoke;
 const listen = window.__TAURI__?.event?.listen;
 
@@ -91,7 +99,58 @@ const dictionary = {
     settingsAutostart: "ログイン時に起動",
     settingsAutostartHint: "常駐がONのときに利用できます",
     settingsSaveError: "設定を保存できませんでした",
-    deprecatedWarning: "非推奨版はサポート対象外です。本体だけを切り替え、設定やスコアは変更しません。"
+    deprecatedWarning: "非推奨版はサポート対象外です。本体だけを切り替え、設定やスコアは変更しません。",
+    close: "閉じる",
+    statusAccount: "BMS-IRアカウント",
+    accountNotLinked: "未連携",
+    accountSetupNeeded: "設定が必要",
+    accountSetup: "セットアップ",
+    accountReview: "確認する",
+    accountMockLinked: "モック連携済み",
+    accountMockReady: "モック完了",
+    onboardingTitle: "BMS-IRセットアップ",
+    onboardingSubtitle: "アカウント連携から起動までの操作イメージ",
+    onboardingMockNotice: "このモックはアカウント作成・認証・設定保存・ネットワーク接続を行いません。",
+    onboardingProgress: "セットアップ進行",
+    onboardingStepAccount: "アカウント",
+    onboardingStepProfile: "プロファイル",
+    onboardingStepConnection: "接続テスト",
+    onboardingStepLaunch: "起動",
+    onboardingAccountTitle: "BMS-IRアカウントを連携",
+    onboardingAccountDescription: "ブラウザで登録またはログインし、このランチャーとの連携を承認する想定です。",
+    onboardingNewAccount: "新規登録を開始",
+    onboardingExistingAccount: "既存アカウントを連携",
+    onboardingBrowserOpened: "ブラウザでBMS-IRを開いた想定",
+    onboardingNewLinkPending: "新規登録と端末連携を待っています。",
+    onboardingExistingLinkPending: "ログインと端末連携を待っています。",
+    onboardingCompleteLink: "Web側の登録・承認を完了",
+    onboardingProfileTitle: "ローカルプロファイルへ自動設定",
+    onboardingProfileDescription: "対象プロファイルを選び、BMS-IRをPrimary IRにしてArena接続を有効化する想定です。",
+    onboardingProfileLabel: "対象プロファイル",
+    onboardingProfileBackup: "既存設定をバックアップ",
+    onboardingProfilePrimary: "BMS-IRをPrimary IRに設定",
+    onboardingProfileArena: "BMS-IR Arena接続を有効化",
+    onboardingConfigureProfile: "自動設定を実行",
+    onboardingConnectionTitle: "接続状態を確認",
+    onboardingConnectionDescription: "本番では端末用ゲームトークンでログインとArena接続を検証する想定です。",
+    onboardingCheckAccount: "BMS-IRログイン",
+    onboardingCheckPlugin: "Arenaプラグイン",
+    onboardingCheckArena: "Arenaサーバー",
+    onboardingCheckPending: "未確認",
+    onboardingCheckTesting: "確認中…",
+    onboardingCheckPassed: "OK（モック）",
+    onboardingTestConnection: "接続テストを開始",
+    onboardingReadyTitle: "プレイ準備ができました",
+    onboardingReadyDescription: "アカウントとローカル設定のモックフローが完了しました。",
+    onboardingReadyAccount: "アカウント",
+    onboardingReadyProfile: "プロファイル",
+    onboardingReadyConnection: "接続",
+    onboardingMockPassed: "OK（モック）",
+    onboardingLaunchReady: "実際の本体・Java・プラグインも確認済みです。既存の起動処理へ進めます。",
+    onboardingLaunchUnavailable: "モックは完了しています。実際に起動するには本体・Java・プラグインの準備が必要です。",
+    onboardingLaunchBlocked: "モック完了。現在のランチャー状態では実起動できないため、上部の本体・Java・プラグイン状態を確認してください。",
+    onboardingReset: "最初から試す",
+    onboardingSessionOnly: "状態はこのランチャー画面だけに保持されます"
   },
   en: {
     checking: "Checking for updates",
@@ -182,7 +241,58 @@ const dictionary = {
     settingsAutostart: "Launch at login",
     settingsAutostartHint: "Available while tray residency is enabled",
     settingsSaveError: "Could not save settings",
-    deprecatedWarning: "Deprecated versions are unsupported. Only the game body changes; settings and scores are preserved."
+    deprecatedWarning: "Deprecated versions are unsupported. Only the game body changes; settings and scores are preserved.",
+    close: "Close",
+    statusAccount: "BMS-IR account",
+    accountNotLinked: "Not linked",
+    accountSetupNeeded: "Setup needed",
+    accountSetup: "Set up",
+    accountReview: "Review",
+    accountMockLinked: "Mock linked",
+    accountMockReady: "Mock complete",
+    onboardingTitle: "BMS-IR setup",
+    onboardingSubtitle: "Account link through launch interaction preview",
+    onboardingMockNotice: "This mock does not create an account, authenticate, save settings, or make network connections.",
+    onboardingProgress: "Setup progress",
+    onboardingStepAccount: "Account",
+    onboardingStepProfile: "Profile",
+    onboardingStepConnection: "Connection test",
+    onboardingStepLaunch: "Launch",
+    onboardingAccountTitle: "Link a BMS-IR account",
+    onboardingAccountDescription: "The intended flow opens BMS-IR in a browser to register or sign in and approve this launcher.",
+    onboardingNewAccount: "Create new account",
+    onboardingExistingAccount: "Link existing account",
+    onboardingBrowserOpened: "Preview of BMS-IR opened in a browser",
+    onboardingNewLinkPending: "Waiting for account creation and device approval.",
+    onboardingExistingLinkPending: "Waiting for sign-in and device approval.",
+    onboardingCompleteLink: "Complete browser approval",
+    onboardingProfileTitle: "Configure a local profile",
+    onboardingProfileDescription: "Choose a profile, set BMS-IR as the Primary IR, and enable Arena connectivity.",
+    onboardingProfileLabel: "Target profile",
+    onboardingProfileBackup: "Back up existing settings",
+    onboardingProfilePrimary: "Set BMS-IR as Primary IR",
+    onboardingProfileArena: "Enable BMS-IR Arena connectivity",
+    onboardingConfigureProfile: "Apply automatic setup",
+    onboardingConnectionTitle: "Check connectivity",
+    onboardingConnectionDescription: "The production flow would verify login and Arena connectivity with a device game token.",
+    onboardingCheckAccount: "BMS-IR login",
+    onboardingCheckPlugin: "Arena plugin",
+    onboardingCheckArena: "Arena server",
+    onboardingCheckPending: "Not checked",
+    onboardingCheckTesting: "Checking…",
+    onboardingCheckPassed: "OK (mock)",
+    onboardingTestConnection: "Start connection test",
+    onboardingReadyTitle: "Ready to play",
+    onboardingReadyDescription: "The mock account and local setup flow is complete.",
+    onboardingReadyAccount: "Account",
+    onboardingReadyProfile: "Profile",
+    onboardingReadyConnection: "Connection",
+    onboardingMockPassed: "OK (mock)",
+    onboardingLaunchReady: "The real game, Java, and plugin are also ready. Launch can hand off to the existing command.",
+    onboardingLaunchUnavailable: "The mock is complete. The game, Java, and plugin must be ready for a real launch.",
+    onboardingLaunchBlocked: "Mock complete. Real launch is currently unavailable; check the game, Java, and plugin status above.",
+    onboardingReset: "Try from the beginning",
+    onboardingSessionOnly: "State is kept only in this launcher window"
   }
 };
 
@@ -203,6 +313,8 @@ let pluginVisible = false;
 let pluginVersions = null;
 let pluginUpdate = null;
 let launcherSettings = null;
+let onboardingMock = createOnboardingMockState();
+let onboardingTestTimer = null;
 const deprecatedNotesCache = {};
 const byId = id => document.getElementById(id);
 const tr = key => dictionary[language][key];
@@ -224,6 +336,7 @@ function applyLanguage() {
   renderDeprecated();
   renderPlugins();
   renderSettings();
+  renderOnboardingMock();
 }
 
 function renderSettings() {
@@ -264,6 +377,98 @@ async function saveSetting(key, value) {
 
 function openDialog(dialog) {
   if (!dialog.open) dialog.showModal();
+}
+
+function renderOnboardingMock() {
+  const completed = completedOnboardingMockSteps(onboardingMock);
+  byId("onboarding-progress-count").textContent = `${completed} / 4`;
+  ONBOARDING_MOCK_STAGES.forEach(stage => {
+    const item = document.querySelector(`[data-onboarding-step="${stage}"]`);
+    item.dataset.state = onboardingMockStepState(onboardingMock, stage);
+    byId(`onboarding-${stage}`).hidden = onboardingMock.stage !== stage;
+  });
+
+  byId("onboarding-account-actions").hidden = onboardingMock.linkPending;
+  byId("onboarding-link-code").hidden = !onboardingMock.linkPending;
+  byId("onboarding-link-method").textContent = tr(
+    onboardingMock.linkMethod === "new"
+      ? "onboardingNewLinkPending"
+      : "onboardingExistingLinkPending"
+  );
+
+  const checkStatus = onboardingMock.connectionPassed
+    ? "onboardingCheckPassed"
+    : (onboardingMock.connectionTesting ? "onboardingCheckTesting" : "onboardingCheckPending");
+  ["account", "plugin", "arena"].forEach(check => {
+    const element = byId(`onboarding-check-${check}`);
+    element.textContent = tr(checkStatus);
+    element.dataset.state = onboardingMock.connectionPassed
+      ? "complete"
+      : (onboardingMock.connectionTesting ? "testing" : "pending");
+  });
+  byId("onboarding-test-connection").disabled = onboardingMock.connectionTesting;
+
+  byId("onboarding-ready-profile").textContent = onboardingMock.profileId;
+  const launchable = canLaunch();
+  byId("onboarding-launch-hint").textContent = tr(
+    onboardingMock.launchUnavailable
+      ? "onboardingLaunchBlocked"
+      : (launchable ? "onboardingLaunchReady" : "onboardingLaunchUnavailable")
+  );
+  byId("onboarding-launch-hint").dataset.kind = onboardingMock.launchUnavailable
+    ? "warning"
+    : (launchable ? "ok" : "neutral");
+
+  const accountSummary = byId("account-summary");
+  const accountBadge = byId("account-badge");
+  const setupButton = byId("onboarding-open");
+  if (!onboardingMock.accountLinked) {
+    accountSummary.textContent = tr("accountNotLinked");
+    setBadge(accountBadge, "warning", tr("accountSetupNeeded"));
+    setupButton.textContent = tr("accountSetup");
+  } else {
+    accountSummary.textContent = "BMSIR_MOCK / 19XXXX";
+    setBadge(
+      accountBadge,
+      onboardingMock.connectionPassed ? "ok" : "available",
+      tr(onboardingMock.connectionPassed ? "accountMockReady" : "accountMockLinked")
+    );
+    setupButton.textContent = tr("accountReview");
+  }
+}
+
+function updateOnboardingMock(event) {
+  onboardingMock = reduceOnboardingMock(onboardingMock, event);
+  renderOnboardingMock();
+}
+
+function startOnboardingAccountLink(method) {
+  updateOnboardingMock({type: "START_ACCOUNT_LINK", method});
+}
+
+function runOnboardingConnectionTest() {
+  updateOnboardingMock({type: "START_CONNECTION_TEST"});
+  if (!onboardingMock.connectionTesting) return;
+  if (onboardingTestTimer) window.clearTimeout(onboardingTestTimer);
+  onboardingTestTimer = window.setTimeout(() => {
+    onboardingTestTimer = null;
+    updateOnboardingMock({type: "COMPLETE_CONNECTION_TEST"});
+  }, 700);
+}
+
+function resetOnboardingMock() {
+  if (onboardingTestTimer) window.clearTimeout(onboardingTestTimer);
+  onboardingTestTimer = null;
+  updateOnboardingMock({type: "RESET"});
+}
+
+function launchFromOnboardingMock() {
+  if (!canLaunch()) {
+    updateOnboardingMock({type: "MARK_LAUNCH_UNAVAILABLE"});
+    return;
+  }
+  byId("onboarding-dialog").close();
+  launch(false);
 }
 
 function renderPlugins() {
@@ -706,6 +911,7 @@ function renderUpdate() {
   renderReleasePanel();
   renderAnnouncements();
   renderDeprecated();
+  renderOnboardingMock();
   if (installingUpdate) {
     setStatus(tr(update?.status === "install_required" ? "installing" : "updating"), "available");
     return;
@@ -889,11 +1095,23 @@ byId("release-notes-open").addEventListener("click", () => openDialog(byId("rele
 byId("release-dialog-close").addEventListener("click", () => byId("release-dialog").close());
 byId("settings-open").addEventListener("click", () => openDialog(byId("settings-dialog")));
 byId("settings-close").addEventListener("click", () => byId("settings-dialog").close());
+byId("onboarding-open").addEventListener("click", () => openDialog(byId("onboarding-dialog")));
+byId("onboarding-close").addEventListener("click", () => byId("onboarding-dialog").close());
+byId("onboarding-new-account").addEventListener("click", () => startOnboardingAccountLink("new"));
+byId("onboarding-existing-account").addEventListener("click", () => startOnboardingAccountLink("existing"));
+byId("onboarding-complete-link").addEventListener("click", () => updateOnboardingMock({type: "COMPLETE_ACCOUNT_LINK"}));
+byId("onboarding-configure-profile").addEventListener("click", () => updateOnboardingMock({
+  type: "CONFIGURE_PROFILE",
+  profileId: byId("onboarding-profile-select").value
+}));
+byId("onboarding-test-connection").addEventListener("click", runOnboardingConnectionTest);
+byId("onboarding-launch").addEventListener("click", launchFromOnboardingMock);
+byId("onboarding-reset").addEventListener("click", resetOnboardingMock);
 byId("resident-state").addEventListener("click", () => saveSetting("resident", !launcherSettings?.resident));
 byId("setting-resident").addEventListener("change", event => saveSetting("resident", event.target.checked));
 byId("setting-background-check").addEventListener("change", event => saveSetting("background_check", event.target.checked));
 byId("setting-autostart").addEventListener("change", event => saveSetting("autostart", event.target.checked));
-[byId("release-dialog"), byId("settings-dialog")].forEach(dialog => {
+[byId("release-dialog"), byId("settings-dialog"), byId("onboarding-dialog")].forEach(dialog => {
   dialog.addEventListener("click", event => {
     const bounds = dialog.getBoundingClientRect();
     const inside = event.clientX >= bounds.left && event.clientX <= bounds.right
