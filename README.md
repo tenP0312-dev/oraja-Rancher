@@ -30,12 +30,14 @@ size, and verified file count. After transfer it reports the verification,
 application, and launcher-restart phases instead of leaving the window on an
 indeterminate update message.
 
-Update checks use the channel selected from the executable name. `BMS-IR
+Configured release builds use their compiled update channel, so downloading or
+renaming a Windows executable cannot redirect it to another channel.
+Unconfigured development builds fall back to the executable name: `BMS-IR
 Arena.exe` reads `stable`; `BMS-IR Arena Test.exe` reads `test`, so separate
 folders can coexist. The equivalent macOS app bundle names select the same
-channels. The signed manifest may declare `launcher_version`; the matching
-platform launcher artifact is required in that release, so a current body can
-still discover and install a newer launcher. Older manifests without this
+fallback channels. The signed manifest may declare `launcher_version`; the
+matching platform launcher artifact is required in that release, so a current
+body can still discover and install a newer launcher. Older manifests without this
 field remain readable and simply do not advertise an independent launcher
 update. Network failure does not newly block a valid installed body. Once a
 signed mandatory update, revocation, or minimum-launcher requirement has been
@@ -108,11 +110,12 @@ The static patch publication tools and manifest layout are maintained in
 
 - `BMSIR_ARENA_RELEASE_PUBLIC_KEY`: raw Ed25519 public key in Base64
 - `BMSIR_ARENA_UPDATE_BASE_URL`: HTTPS root containing `channels/`
+- `BMSIR_ARENA_UPDATE_CHANNEL`: fixed `stable` or `test` release channel
 - `BMSIR_ARENA_CLIENT_VERSION`: initial body version when no local marker exists
 
-The release packager accepts only a launcher compiled with both the endpoint
-and verification key. This prevents an offline CI validation binary from being
-renamed and shipped as a working updater.
+The release packager accepts only a launcher compiled with the endpoint,
+verification key, and fixed channel. This prevents an offline CI validation
+binary from being renamed and shipped as a working updater.
 
 ## Validation build
 

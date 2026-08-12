@@ -31,6 +31,7 @@ const fn configured_value(value: Option<&str>) -> bool {
 
 pub const CONFIGURATION_MARKER: &str =
     if configured_value(option_env!("BMSIR_ARENA_UPDATE_BASE_URL"))
+        && configured_value(option_env!("BMSIR_ARENA_UPDATE_CHANNEL"))
         && configured_value(option_env!("BMSIR_ARENA_RELEASE_PUBLIC_KEY"))
     {
         "BMSIR_ARENA_UPDATE_CONFIGURED_V1"
@@ -168,9 +169,25 @@ impl UpdateProgress {
 pub fn channel() -> String {
     std::env::current_exe()
         .ok()
-        .map(|path| channel_from_executable_path(&path))
-        .unwrap_or("stable")
+        .map(|path| {
+            channel_from_configuration_or_path(option_env!("BMSIR_ARENA_UPDATE_CHANNEL"), &path)
+        })
+        .unwrap_or_else(|| {
+            configured_channel(option_env!("BMSIR_ARENA_UPDATE_CHANNEL")).unwrap_or("stable")
+        })
         .to_string()
+}
+
+fn configured_channel(value: Option<&str>) -> Option<&'static str> {
+    match value {
+        Some("stable") => Some("stable"),
+        Some("test") => Some("test"),
+        _ => None,
+    }
+}
+
+fn channel_from_configuration_or_path(configured: Option<&str>, path: &Path) -> &'static str {
+    configured_channel(configured).unwrap_or_else(|| channel_from_executable_path(path))
 }
 
 fn channel_from_name(name: &str) -> &'static str {
@@ -1594,6 +1611,21 @@ mod tests {
         assert_eq!(channel_from_name("BMS-IR Arena"), "stable");
         assert_eq!(channel_from_name("BMS-IR Arena Test"), "test");
         assert_eq!(channel_from_name("contest"), "stable");
+    }
+
+    #[test]
+    fn configured_channel_does_not_depend_on_distributed_executable_name() {
+        let github_asset =
+            Path::new("C:/Arena/BMS-IR-Arena-Test-Launcher-0.2.22-windows-x86-64.exe");
+        assert_eq!(configured_channel(Some("test")), Some("test"));
+        assert_eq!(configured_channel(Some("stable")), Some("stable"));
+        assert_eq!(configured_channel(None), None);
+        assert_eq!(configured_channel(Some("preview")), None);
+        assert_eq!(channel_from_executable_path(github_asset), "stable");
+        assert_eq!(
+            channel_from_configuration_or_path(Some("test"), github_asset),
+            "test"
+        );
     }
 
     #[test]
