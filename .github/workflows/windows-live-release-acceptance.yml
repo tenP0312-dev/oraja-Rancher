@@ -1,0 +1,196 @@
+name: Windows live launcher acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Current patch-server launcher release tag
+        required: true
+        type: string
+      previous_release_tag:
+        description: Previous patch-server launcher release tag
+        required: true
+        type: string
+  pull_request:
+    paths:
+      - .github/workflows/windows-live-release-acceptance.yml
+
+permissions:
+  contents: read
+
+jobs:
+  windows-live-acceptance:
+    runs-on: windows-2022
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag || 'test-launcher-0.2.22' }}
+      PREVIOUS_RELEASE_TAG: ${{ inputs.previous_release_tag || 'test-launcher-0.2.21' }}
+    steps:
+      - name: Verify long-name channel selection and native self-update
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $patchRepository = "tenP0312-dev/bms-ir-arena-patch-server"
+          $currentVersion = $env:RELEASE_TAG -replace '^test-launcher-', ''
+          $previousVersion = $env:PREVIOUS_RELEASE_TAG -replace '^test-launcher-', ''
+          if ($currentVersion -eq $env:RELEASE_TAG -or $previousVersion -eq $env:PREVIOUS_RELEASE_TAG) {
+            throw "Release tags must use test-launcher-<version>"
+          }
+          $currentAsset = "BMS-IR-Arena-Test-Launcher-$currentVersion-windows-x86-64.exe"
+          $previousAsset = "BMS-IR-Arena-Test-Launcher-$previousVersion-windows-x86-64.exe"
+          $liveManifestUrl = "https://tenp0312-dev.github.io/bms-ir-arena-patch-server/channels/test/windows-x64/manifest.json"
+          $currentReleaseBase = "https://github.com/$patchRepository/releases/download/$env:RELEASE_TAG"
+          $previousReleaseBase = "https://github.com/$patchRepository/releases/download/$env:PREVIOUS_RELEASE_TAG"
+          $currentLauncher = Join-Path $env:RUNNER_TEMP $currentAsset
+          $previousLauncher = Join-Path $env:RUNNER_TEMP $previousAsset
+          $liveManifest = Join-Path $env:RUNNER_TEMP "live-windows-manifest.json"
+
+          Invoke-WebRequest "$currentReleaseBase/$currentAsset" -OutFile $currentLauncher
+          Invoke-WebRequest "$previousReleaseBase/$previousAsset" -OutFile $previousLauncher
+          Invoke-WebRequest $liveManifestUrl -OutFile $liveManifest
+
+          $manifest = Get-Content $liveManifest -Raw | ConvertFrom-Json
+          if ($manifest.channel -ne "test" -or $manifest.platform -ne "windows-x64") {
+            throw "Live manifest target is not test/windows-x64"
+          }
+          if ($manifest.launcher_version -ne $currentVersion) {
+            throw "Live launcher version is $($manifest.launcher_version), expected $currentVersion"
+          }
+          $launcherArtifact = @($manifest.artifacts | Where-Object path -eq "BMS-IR Arena Test.exe")
+          if ($launcherArtifact.Count -ne 1) {
+            throw "Live manifest does not contain exactly one canonical Windows launcher"
+          }
+          $currentHash = (Get-FileHash -Algorithm SHA256 $currentLauncher).Hash.ToLowerInvariant()
+          if ($launcherArtifact[0].sha256 -ne $currentHash) {
+            throw "GitHub release launcher does not match the signed live manifest"
+          }
+
+          function New-ReadyRoot([string] $root) {
+            New-Item -ItemType Directory -Force -Path $root, (Join-Path $root "ir"), (Join-Path $root "runtime/bin") | Out-Null
+            Set-Content (Join-Path $root "Arena-oraja.jar") "unchanged-arena-body" -NoNewline
+            Set-Content (Join-Path $root "ir/bms_ir_acceptance.jar") "unchanged-plugin" -NoNewline
+            Set-Content (Join-Path $root "runtime/bin/java-sentinel.txt") "unchanged-java" -NoNewline
+            Set-Content (Join-Path $root "settings-sentinel.txt") "unchanged-settings" -NoNewline
+            Set-Content (Join-Path $root "bmsir-arena-version.txt") "0.4.14.35" -NoNewline
+          }
+
+          function Stop-ProcessTree([System.Diagnostics.Process] $process) {
+            if (-not $process.HasExited) {
+              $process.Kill($true)
+              $process.WaitForExit()
+            }
+          }
+
+          # The exact GitHub asset name resolves to stable in the old fallback
+          # algorithm. A configured current binary must still fetch test and
+          # cache the byte-identical signed live manifest on first load.
+          $longNameRoot = Join-Path $env:RUNNER_TEMP "long-name-check"
+          New-ReadyRoot $longNameRoot
+          $longNameLauncher = Join-Path $longNameRoot $currentAsset
+          Copy-Item $currentLauncher $longNameLauncher
+          $longNameProcess = Start-Process $longNameLauncher -WorkingDirectory $longNameRoot -PassThru
+          $cachedPolicy = Join-Path $longNameRoot ".bmsir-launcher-policy.json"
+          try {
+            foreach ($attempt in 1..60) {
+              if (Test-Path $cachedPolicy) { break }
+              if ($longNameProcess.HasExited) {
+                throw "Long-name launcher exited before caching the live manifest"
+              }
+              Start-Sleep -Seconds 1
+            }
+            if (-not (Test-Path $cachedPolicy)) {
+              throw "Long-name launcher did not cache the live manifest"
+            }
+            $cachedHash = (Get-FileHash -Algorithm SHA256 $cachedPolicy).Hash
+            $liveHash = (Get-FileHash -Algorithm SHA256 $liveManifest).Hash
+            if ($cachedHash -ne $liveHash) {
+              throw "Long-name launcher cached a manifest other than the live test pointer"
+            }
+          } finally {
+            Stop-ProcessTree $longNameProcess
+          }
+
+          # Exercise the real previous helper binary against the signed current
+          # launcher-only manifest. Only the canonical launcher may change.
+          $updateRoot = Join-Path $env:RUNNER_TEMP "self-update-check"
+          New-ReadyRoot $updateRoot
+          $canonicalLauncher = Join-Path $updateRoot "BMS-IR Arena Test.exe"
+          Copy-Item $previousLauncher $canonicalLauncher
+          $protectedFiles = @(
+            "Arena-oraja.jar",
+            "ir/bms_ir_acceptance.jar",
+            "runtime/bin/java-sentinel.txt",
+            "settings-sentinel.txt",
+            "bmsir-arena-version.txt"
+          )
+          $protectedHashes = @{}
+          foreach ($relative in $protectedFiles) {
+            $protectedHashes[$relative] = (Get-FileHash -Algorithm SHA256 (Join-Path $updateRoot $relative)).Hash
+          }
+
+          $staging = Join-Path $updateRoot ".bmsir-update-staging/launcher"
+          New-Item -ItemType Directory -Force -Path $staging | Out-Null
+          Copy-Item $currentLauncher (Join-Path $staging "BMS-IR Arena Test.exe")
+          $stagedManifest = Join-Path $staging ".bmsir-update-manifest.json"
+          Copy-Item $liveManifest $stagedManifest
+          $helper = Join-Path $updateRoot ".bmsir-launcher-update-helper.exe"
+          Copy-Item $previousLauncher $helper
+
+          $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+          $startInfo.FileName = $helper
+          $startInfo.UseShellExecute = $false
+          foreach ($argument in @(
+            "--apply-self-update",
+            $updateRoot,
+            $staging,
+            $stagedManifest,
+            "BMS-IR Arena Test.exe",
+            "0",
+            "launcher",
+            "0",
+            "0"
+          )) {
+            $startInfo.ArgumentList.Add($argument)
+          }
+          $helperProcess = [System.Diagnostics.Process]::Start($startInfo)
+          if (-not $helperProcess.WaitForExit(60000) -or $helperProcess.ExitCode -ne 0) {
+            throw "0.2.21 self-update helper failed"
+          }
+
+          foreach ($attempt in 1..60) {
+            $updated = (Get-FileHash -Algorithm SHA256 $canonicalLauncher).Hash.ToLowerInvariant() -eq $currentHash
+            $clean = -not (Test-Path (Join-Path $updateRoot ".bmsir-update-staging")) `
+              -and -not (Test-Path (Join-Path $updateRoot ".bmsir-launcher-backup")) `
+              -and -not (Test-Path $helper)
+            if ($updated -and $clean) { break }
+            Start-Sleep -Seconds 1
+          }
+          if ((Get-FileHash -Algorithm SHA256 $canonicalLauncher).Hash.ToLowerInvariant() -ne $currentHash) {
+            throw "Canonical launcher was not replaced with the signed $currentVersion binary"
+          }
+          foreach ($relative in $protectedFiles) {
+            $actual = (Get-FileHash -Algorithm SHA256 (Join-Path $updateRoot $relative)).Hash
+            if ($actual -ne $protectedHashes[$relative]) {
+              throw "Self-update changed protected path: $relative"
+            }
+          }
+          foreach ($residue in @(
+            ".bmsir-update-staging",
+            ".bmsir-launcher-backup",
+            ".bmsir-launcher-update-helper.exe"
+          )) {
+            if (Test-Path (Join-Path $updateRoot $residue)) {
+              throw "Self-update residue remains: $residue"
+            }
+          }
+          Get-Process | ForEach-Object {
+            try {
+              if ($_.Path -and $_.Path.StartsWith($updateRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $_.Kill($true)
+                $_.WaitForExit()
+              }
+            } catch {
+              # Ignore processes that exit between enumeration and cleanup.
+            }
+          }
+
+          Write-Host "Windows long-name test-channel request and $previousVersion -> $currentVersion self-update passed"
