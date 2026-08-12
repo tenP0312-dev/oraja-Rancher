@@ -8,15 +8,39 @@ export const ONBOARDING_MOCK_STAGES = Object.freeze([
 export function createOnboardingMockState() {
   return {
     stage: "account",
-    linkMethod: null,
-    linkPending: false,
+    accountMode: "new",
     accountLinked: false,
+    accountId: null,
+    accountName: null,
     profileId: "PLAYER",
     profileConfigured: false,
     connectionTesting: false,
     connectionPassed: false,
     launchUnavailable: false
   };
+}
+
+export function validateOnboardingMockAccount(input) {
+  const mode = input?.mode === "existing" ? "existing" : "new";
+  const password = String(input?.password || "");
+  if (mode === "new") {
+    const displayName = String(input?.displayName || "").trim();
+    if (!displayName) return {valid: false, error: "displayNameRequired"};
+    if (displayName.length > 64) return {valid: false, error: "displayNameTooLong"};
+    if (password.length < 6) return {valid: false, error: "passwordTooShort"};
+    if (password !== String(input?.passwordConfirmation || "")) {
+      return {valid: false, error: "passwordMismatch"};
+    }
+    if (!input?.termsAccepted) return {valid: false, error: "termsRequired"};
+    return {valid: true, accountId: "190000", accountName: displayName};
+  }
+
+  const playerId = String(input?.playerId || "").trim();
+  if (!/^\d+$/.test(playerId) || Number(playerId) < 190000 || Number(playerId) > 2147483647) {
+    return {valid: false, error: "playerIdInvalid"};
+  }
+  if (!password) return {valid: false, error: "passwordRequired"};
+  return {valid: true, accountId: playerId, accountName: "BMSIR_MOCK"};
 }
 
 export function onboardingMockStepState(state, stage) {
@@ -37,21 +61,21 @@ export function completedOnboardingMockSteps(state) {
 
 export function reduceOnboardingMock(state, event) {
   switch (event.type) {
-    case "START_ACCOUNT_LINK":
+    case "SELECT_ACCOUNT_MODE":
       if (state.stage !== "account") return state;
       return {
         ...state,
-        linkMethod: event.method === "new" ? "new" : "existing",
-        linkPending: true,
+        accountMode: event.mode === "existing" ? "existing" : "new",
         launchUnavailable: false
       };
-    case "COMPLETE_ACCOUNT_LINK":
-      if (state.stage !== "account" || !state.linkPending) return state;
+    case "COMPLETE_ACCOUNT":
+      if (state.stage !== "account" || !event.accountId || !event.accountName) return state;
       return {
         ...state,
         stage: "profile",
-        linkPending: false,
-        accountLinked: true
+        accountLinked: true,
+        accountId: String(event.accountId),
+        accountName: String(event.accountName)
       };
     case "CONFIGURE_PROFILE":
       if (state.stage !== "profile" || !state.accountLinked) return state;

@@ -138,10 +138,10 @@
     <button id="onboarding-close" class="quiet icon-button" type="button" data-i18n-aria-label="close" aria-label="閉じる">&times;</button>
   </div>
 
-  <div class="onboarding-content">
+  <div id="onboarding-content" class="onboarding-content">
     <p class="mock-notice" data-i18n="onboardingMockNotice">このモックはアカウント作成・認証・設定保存・ネットワーク接続を行いません。</p>
     <div class="onboarding-progress-line"><strong data-i18n="onboardingProgress">セットアップ進行</strong><span id="onboarding-progress-count">0 / 4</span></div>
-    <ol class="onboarding-steps" aria-label="Setup steps">
+    <ol class="onboarding-steps" data-i18n-aria-label="onboardingStepsLabel" aria-label="セットアップ手順">
       <li data-onboarding-step="account"><span>1</span><strong data-i18n="onboardingStepAccount">アカウント</strong></li>
       <li data-onboarding-step="profile"><span>2</span><strong data-i18n="onboardingStepProfile">プロファイル</strong></li>
       <li data-onboarding-step="connection"><span>3</span><strong data-i18n="onboardingStepConnection">接続テスト</strong></li>
@@ -149,20 +149,41 @@
     </ol>
 
     <section id="onboarding-account" class="onboarding-stage">
-      <h3 data-i18n="onboardingAccountTitle">BMS-IRアカウントを連携</h3>
-      <p data-i18n="onboardingAccountDescription">ブラウザで登録またはログインし、このランチャーとの連携を承認する想定です。</p>
-      <div id="onboarding-account-actions" class="onboarding-actions">
-        <button id="onboarding-new-account" class="primary" type="button" data-i18n="onboardingNewAccount">新規登録を開始</button>
-        <button id="onboarding-existing-account" type="button" data-i18n="onboardingExistingAccount">既存アカウントを連携</button>
+      <h3 data-i18n="onboardingAccountTitle">ランチャー内でアカウントを準備</h3>
+      <p data-i18n="onboardingAccountDescription">新規登録も既存アカウントのログインも、この画面から離れずに進める想定です。</p>
+      <div class="account-mode-switch" role="tablist" data-i18n-aria-label="onboardingAccountModeLabel" aria-label="アカウント操作">
+        <button id="onboarding-new-account" type="button" role="tab" aria-selected="true" aria-controls="onboarding-new-account-fields" data-i18n="onboardingNewAccount">新規登録</button>
+        <button id="onboarding-existing-account" type="button" role="tab" aria-selected="false" aria-controls="onboarding-existing-account-fields" data-i18n="onboardingExistingAccount">ログイン</button>
       </div>
-      <div id="onboarding-link-code" class="link-code-panel" hidden>
-        <div>
-          <p class="eyebrow" data-i18n="onboardingBrowserOpened">ブラウザでBMS-IRを開いた想定</p>
-          <strong>M0CK-IR01</strong>
+      <form id="onboarding-account-form" autocomplete="off" novalidate>
+        <div id="onboarding-new-account-fields" class="onboarding-form-fields" role="tabpanel" aria-labelledby="onboarding-new-account">
+          <label class="onboarding-field"><span data-i18n="onboardingDisplayNameLabel">プレイヤー名</span>
+            <input id="onboarding-display-name" name="display-name" type="text" maxlength="64" autocomplete="off" data-i18n-placeholder="onboardingDisplayNamePlaceholder" placeholder="BMSIR_PLAYER">
+          </label>
+          <label class="onboarding-field"><span data-i18n="onboardingPasswordLabel">Webログイン用パスワード</span>
+            <input id="onboarding-new-password" name="new-password" type="password" minlength="6" autocomplete="off">
+          </label>
+          <label class="onboarding-field"><span data-i18n="onboardingPasswordConfirmLabel">パスワード（確認）</span>
+            <input id="onboarding-new-password-confirm" name="new-password-confirm" type="password" minlength="6" autocomplete="off">
+          </label>
+          <details class="terms-preview">
+            <summary data-i18n="onboardingTermsPreview">利用規約を確認（モック）</summary>
+            <p data-i18n="onboardingTermsDescription">実装時はBMS-IRから最新の利用規約を取得し、このランチャー内に全文を表示します。</p>
+          </details>
+          <label class="onboarding-checkbox"><input id="onboarding-accept-terms" name="accept-terms" type="checkbox"><span data-i18n="onboardingAcceptTerms">利用規約を確認し、同意します</span></label>
         </div>
-        <p id="onboarding-link-method"></p>
-        <button id="onboarding-complete-link" class="primary" type="button" data-i18n="onboardingCompleteLink">Web側の登録・承認を完了</button>
-      </div>
+        <div id="onboarding-existing-account-fields" class="onboarding-form-fields" role="tabpanel" aria-labelledby="onboarding-existing-account" hidden>
+          <label class="onboarding-field"><span data-i18n="onboardingPlayerIdLabel">BMS-IR ID</span>
+            <input id="onboarding-player-id" name="player-id" type="text" inputmode="numeric" autocomplete="off" pattern="[0-9]+" data-i18n-placeholder="onboardingPlayerIdPlaceholder" placeholder="190000">
+          </label>
+          <label class="onboarding-field"><span data-i18n="onboardingLoginPasswordLabel">Webログイン用パスワード</span>
+            <input id="onboarding-existing-password" name="existing-password" type="password" autocomplete="off">
+          </label>
+          <p class="credential-note" data-i18n="onboardingCredentialNote">Webログイン用パスワードはゲーム側へ保存せず、実装時はログイン後にゲーム用認証情報を別途設定します。</p>
+        </div>
+        <p id="onboarding-account-error" class="form-error" role="alert" aria-live="polite" hidden></p>
+        <div class="onboarding-actions"><button id="onboarding-submit-account" class="primary" type="submit" data-i18n="onboardingCreateAndContinue">登録して続行</button></div>
+      </form>
     </section>
 
     <section id="onboarding-profile" class="onboarding-stage" hidden>
@@ -198,7 +219,7 @@
       <h3 data-i18n="onboardingReadyTitle">プレイ準備ができました</h3>
       <p data-i18n="onboardingReadyDescription">アカウントとローカル設定のモックフローが完了しました。</p>
       <dl class="ready-summary">
-        <div><dt data-i18n="onboardingReadyAccount">アカウント</dt><dd>BMSIR_MOCK / 19XXXX</dd></div>
+        <div><dt data-i18n="onboardingReadyAccount">アカウント</dt><dd id="onboarding-ready-account">BMSIR_MOCK / 190000</dd></div>
         <div><dt data-i18n="onboardingReadyProfile">プロファイル</dt><dd id="onboarding-ready-profile">PLAYER</dd></div>
         <div><dt data-i18n="onboardingReadyConnection">接続</dt><dd data-i18n="onboardingMockPassed">OK（モック）</dd></div>
       </dl>

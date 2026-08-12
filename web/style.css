@@ -292,12 +292,20 @@ pre { overflow: auto; white-space: pre-wrap; color: #8b2929; }
 .onboarding-stage h3 { margin: 0; font-size: 18px; }
 .onboarding-stage > p { margin: 0; }
 .onboarding-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 9px; margin-top: 3px; }
-.link-code-panel { display: grid; gap: 12px; padding: 14px; border: 1px solid #b8cabf; border-radius: 8px; background: #f3f8f4; }
-.link-code-panel > div { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
-.link-code-panel .eyebrow { margin: 0; color: #536058; font-size: 12px; }
-.link-code-panel > div > strong { font-family: ui-monospace, SFMono-Regular, monospace; font-size: 18px; letter-spacing: .08em; }
+.account-mode-switch { display: grid; grid-template-columns: 1fr 1fr; padding: 3px; border: 1px solid #c8d0ca; border-radius: 8px; background: #edf0ed; }
+.account-mode-switch button { min-height: 36px; border-color: transparent; background: transparent; }
+.account-mode-switch button[aria-selected="true"] { border-color: #8eb49b; color: #1d5032; background: #fff; box-shadow: 0 1px 4px rgba(23, 33, 27, .1); }
+#onboarding-account-form, .onboarding-form-fields { display: grid; gap: 12px; }
 .onboarding-field { display: grid; gap: 6px; color: #354139; font-size: 13px; font-weight: 700; }
-.onboarding-field select { min-height: 40px; padding: 7px 10px; border: 1px solid #9da8a0; border-radius: 6px; color: #17211b; background: #fff; font: inherit; }
+.onboarding-field input, .onboarding-field select { width: 100%; min-height: 40px; padding: 7px 10px; border: 1px solid #9da8a0; border-radius: 6px; color: #17211b; background: #fff; font: inherit; }
+.onboarding-field input:focus, .onboarding-field select:focus { border-color: #23633f; outline: 3px solid rgba(35, 99, 63, .14); }
+.terms-preview { margin: 0; padding: 10px 12px; border: 1px solid #d9ded9; border-radius: 7px; background: #f8faf8; }
+.terms-preview summary { color: #355e44; font-size: 13px; }
+.terms-preview p { font-size: 12px; }
+.onboarding-checkbox { display: flex; align-items: flex-start; gap: 9px; color: #354139; font-size: 13px; font-weight: 700; }
+.onboarding-checkbox input { flex: 0 0 auto; width: 18px; height: 18px; margin: 1px 0 0; accent-color: #23633f; }
+.credential-note { padding: 9px 11px; border-left: 3px solid #4f7a9c; color: #38566d; background: #eef5fa; font-size: 12px; }
+.form-error { margin: 0; padding: 9px 11px; border-left: 3px solid #b43c3c; color: #812929; background: #fbeeee; font-size: 13px; font-weight: 700; }
 .setup-summary { display: grid; gap: 7px; margin: 0; padding-left: 22px; color: #354139; }
 .connection-checks { display: grid; gap: 0; margin: 0; padding: 0; border: 1px solid #d9ded9; border-radius: 7px; list-style: none; overflow: hidden; }
 .connection-checks li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border-bottom: 1px solid #d9ded9; }
@@ -337,6 +345,6 @@ pre { overflow: auto; white-space: pre-wrap; color: #8b2929; }
   .onboarding-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .onboarding-actions { flex-direction: column; }
   .onboarding-actions button { width: 100%; }
-  .link-code-panel > div, .onboarding-footer { align-items: flex-start; flex-direction: column; }
+  .onboarding-footer { align-items: flex-start; flex-direction: column; }
   .ready-summary div { grid-template-columns: 1fr; }
 }
