@@ -151,3 +151,9 @@ inventory verification, launcher self-update, post-update cleanup, or storage
 behavior changed. Ordinary UI and client fixes need only the sparse-update
 path. If final validation reveals a bug, fix it and repeat the affected check;
 the reduced loop must not be used to skip a real regression.
+
+After publishing an internal launcher-only release, dispatch `Windows live
+launcher acceptance` with the current and previous patch-server release tags.
+It runs the GitHub-distributed long EXE name against the live signed test
+pointer, then verifies native helper replacement and cleanup in an isolated
+portable root. This is release acceptance, not a substitute for source CI.
