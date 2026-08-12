@@ -1,3 +1,12 @@
+import {
+  ONBOARDING_MOCK_STAGES,
+  completedOnboardingMockSteps,
+  createOnboardingMockState,
+  onboardingMockStepState,
+  reduceOnboardingMock,
+  validateOnboardingMockAccount
+} from "./onboarding-mock.mjs";
+
 const invoke = window.__TAURI__?.core?.invoke;
 const listen = window.__TAURI__?.event?.listen;
 
@@ -91,7 +100,76 @@ const dictionary = {
     settingsAutostart: "ログイン時に起動",
     settingsAutostartHint: "常駐がONのときに利用できます",
     settingsSaveError: "設定を保存できませんでした",
-    deprecatedWarning: "非推奨版はサポート対象外です。本体だけを切り替え、設定やスコアは変更しません。"
+    deprecatedWarning: "非推奨版はサポート対象外です。本体だけを切り替え、設定やスコアは変更しません。",
+    close: "閉じる",
+    statusAccount: "BMS-IRアカウント",
+    accountNotLinked: "未連携",
+    accountSetupNeeded: "設定が必要",
+    accountSetup: "セットアップ",
+    accountReview: "確認する",
+    accountMockLinked: "モック認証済み",
+    accountMockReady: "モック完了",
+    onboardingTitle: "BMS-IRセットアップ",
+    onboardingSubtitle: "登録・ログインから起動まで、この画面内で完結",
+    onboardingMockNotice: "このモックは入力内容を送信・保存しません。パスワードはモック状態にも保持されません。",
+    onboardingProgress: "セットアップ進行",
+    onboardingStepsLabel: "セットアップ手順",
+    onboardingStepAccount: "アカウント",
+    onboardingStepProfile: "プロファイル",
+    onboardingStepConnection: "接続テスト",
+    onboardingStepLaunch: "起動",
+    onboardingAccountTitle: "ランチャー内でアカウントを準備",
+    onboardingAccountDescription: "新規登録も既存アカウントのログインも、この画面から離れずに進める想定です。",
+    onboardingAccountModeLabel: "アカウント操作",
+    onboardingNewAccount: "新規登録",
+    onboardingExistingAccount: "ログイン",
+    onboardingDisplayNameLabel: "プレイヤー名",
+    onboardingDisplayNamePlaceholder: "BMSIR_PLAYER",
+    onboardingPasswordLabel: "Webログイン用パスワード",
+    onboardingPasswordConfirmLabel: "パスワード（確認）",
+    onboardingTermsPreview: "利用規約を確認（モック）",
+    onboardingTermsDescription: "実装時はBMS-IRから最新の利用規約を取得し、このランチャー内に全文を表示します。",
+    onboardingAcceptTerms: "利用規約を確認し、同意します",
+    onboardingPlayerIdLabel: "BMS-IR ID",
+    onboardingPlayerIdPlaceholder: "190000",
+    onboardingLoginPasswordLabel: "Webログイン用パスワード",
+    onboardingCredentialNote: "Webログイン用パスワードはゲーム側へ保存せず、実装時はログイン後にゲーム用認証情報を別途設定します。",
+    onboardingCreateAndContinue: "登録して続行",
+    onboardingLoginAndContinue: "ログインして続行",
+    onboardingErrorDisplayNameRequired: "プレイヤー名を入力してください。",
+    onboardingErrorDisplayNameTooLong: "プレイヤー名は64文字以内で入力してください。",
+    onboardingErrorPasswordTooShort: "パスワードは6文字以上で入力してください。",
+    onboardingErrorPasswordMismatch: "確認用パスワードが一致しません。",
+    onboardingErrorTermsRequired: "利用規約への同意が必要です。",
+    onboardingErrorPlayerIdInvalid: "190000以上のBMS-IR IDを入力してください。",
+    onboardingErrorPasswordRequired: "パスワードを入力してください。",
+    onboardingProfileTitle: "ローカルプロファイルへ自動設定",
+    onboardingProfileDescription: "対象プロファイルを選び、ゲーム用認証情報とArena接続を自動設定する想定です。",
+    onboardingProfileLabel: "対象プロファイル",
+    onboardingProfileBackup: "既存設定をバックアップ",
+    onboardingProfilePrimary: "ゲーム用認証情報を安全に設定",
+    onboardingProfileArena: "BMS-IR Arena接続を有効化",
+    onboardingConfigureProfile: "自動設定を実行",
+    onboardingConnectionTitle: "接続状態を確認",
+    onboardingConnectionDescription: "本番ではWebログイン用パスワードとは別のゲーム用認証情報で、BMS-IRとArena接続を検証します。",
+    onboardingCheckAccount: "BMS-IRログイン",
+    onboardingCheckPlugin: "Arenaプラグイン",
+    onboardingCheckArena: "Arenaサーバー",
+    onboardingCheckPending: "未確認",
+    onboardingCheckTesting: "確認中…",
+    onboardingCheckPassed: "OK（モック）",
+    onboardingTestConnection: "接続テストを開始",
+    onboardingReadyTitle: "プレイ準備ができました",
+    onboardingReadyDescription: "アカウントとローカル設定のモックフローが完了しました。",
+    onboardingReadyAccount: "アカウント",
+    onboardingReadyProfile: "プロファイル",
+    onboardingReadyConnection: "接続",
+    onboardingMockPassed: "OK（モック）",
+    onboardingLaunchReady: "実際の本体・Java・プラグインも確認済みです。既存の起動処理へ進めます。",
+    onboardingLaunchUnavailable: "モックは完了しています。実際に起動するには本体・Java・プラグインの準備が必要です。",
+    onboardingLaunchBlocked: "モック完了。現在のランチャー状態では実起動できないため、上部の本体・Java・プラグイン状態を確認してください。",
+    onboardingReset: "最初から試す",
+    onboardingSessionOnly: "状態はこのランチャー画面だけに保持されます"
   },
   en: {
     checking: "Checking for updates",
@@ -182,7 +260,76 @@ const dictionary = {
     settingsAutostart: "Launch at login",
     settingsAutostartHint: "Available while tray residency is enabled",
     settingsSaveError: "Could not save settings",
-    deprecatedWarning: "Deprecated versions are unsupported. Only the game body changes; settings and scores are preserved."
+    deprecatedWarning: "Deprecated versions are unsupported. Only the game body changes; settings and scores are preserved.",
+    close: "Close",
+    statusAccount: "BMS-IR account",
+    accountNotLinked: "Not linked",
+    accountSetupNeeded: "Setup needed",
+    accountSetup: "Set up",
+    accountReview: "Review",
+    accountMockLinked: "Mock authenticated",
+    accountMockReady: "Mock complete",
+    onboardingTitle: "BMS-IR setup",
+    onboardingSubtitle: "Register or sign in and continue to launch without leaving this window",
+    onboardingMockNotice: "This mock does not send or save input. Passwords are not retained in mock state.",
+    onboardingProgress: "Setup progress",
+    onboardingStepsLabel: "Setup steps",
+    onboardingStepAccount: "Account",
+    onboardingStepProfile: "Profile",
+    onboardingStepConnection: "Connection test",
+    onboardingStepLaunch: "Launch",
+    onboardingAccountTitle: "Prepare your account in the launcher",
+    onboardingAccountDescription: "Create an account or sign in without leaving this window.",
+    onboardingAccountModeLabel: "Account action",
+    onboardingNewAccount: "Create account",
+    onboardingExistingAccount: "Sign in",
+    onboardingDisplayNameLabel: "Player name",
+    onboardingDisplayNamePlaceholder: "BMSIR_PLAYER",
+    onboardingPasswordLabel: "Web login password",
+    onboardingPasswordConfirmLabel: "Confirm password",
+    onboardingTermsPreview: "Review terms (mock)",
+    onboardingTermsDescription: "The production launcher would fetch the latest BMS-IR terms and show the full text here.",
+    onboardingAcceptTerms: "I have reviewed and agree to the terms",
+    onboardingPlayerIdLabel: "BMS-IR ID",
+    onboardingPlayerIdPlaceholder: "190000",
+    onboardingLoginPasswordLabel: "Web login password",
+    onboardingCredentialNote: "The Web login password is not saved to the game. Production setup would configure separate game credentials after sign-in.",
+    onboardingCreateAndContinue: "Create and continue",
+    onboardingLoginAndContinue: "Sign in and continue",
+    onboardingErrorDisplayNameRequired: "Enter a player name.",
+    onboardingErrorDisplayNameTooLong: "Keep the player name within 64 characters.",
+    onboardingErrorPasswordTooShort: "Enter a password with at least 6 characters.",
+    onboardingErrorPasswordMismatch: "The confirmation password does not match.",
+    onboardingErrorTermsRequired: "You must agree to the terms.",
+    onboardingErrorPlayerIdInvalid: "Enter a BMS-IR ID of 190000 or higher.",
+    onboardingErrorPasswordRequired: "Enter your password.",
+    onboardingProfileTitle: "Configure a local profile",
+    onboardingProfileDescription: "Choose a profile and automatically configure game credentials and Arena connectivity.",
+    onboardingProfileLabel: "Target profile",
+    onboardingProfileBackup: "Back up existing settings",
+    onboardingProfilePrimary: "Configure game credentials securely",
+    onboardingProfileArena: "Enable BMS-IR Arena connectivity",
+    onboardingConfigureProfile: "Apply automatic setup",
+    onboardingConnectionTitle: "Check connectivity",
+    onboardingConnectionDescription: "Production would verify BMS-IR and Arena connectivity with game credentials separate from the Web login password.",
+    onboardingCheckAccount: "BMS-IR login",
+    onboardingCheckPlugin: "Arena plugin",
+    onboardingCheckArena: "Arena server",
+    onboardingCheckPending: "Not checked",
+    onboardingCheckTesting: "Checking…",
+    onboardingCheckPassed: "OK (mock)",
+    onboardingTestConnection: "Start connection test",
+    onboardingReadyTitle: "Ready to play",
+    onboardingReadyDescription: "The mock account and local setup flow is complete.",
+    onboardingReadyAccount: "Account",
+    onboardingReadyProfile: "Profile",
+    onboardingReadyConnection: "Connection",
+    onboardingMockPassed: "OK (mock)",
+    onboardingLaunchReady: "The real game, Java, and plugin are also ready. Launch can hand off to the existing command.",
+    onboardingLaunchUnavailable: "The mock is complete. The game, Java, and plugin must be ready for a real launch.",
+    onboardingLaunchBlocked: "Mock complete. Real launch is currently unavailable; check the game, Java, and plugin status above.",
+    onboardingReset: "Try from the beginning",
+    onboardingSessionOnly: "State is kept only in this launcher window"
   }
 };
 
@@ -203,9 +350,21 @@ let pluginVisible = false;
 let pluginVersions = null;
 let pluginUpdate = null;
 let launcherSettings = null;
+let onboardingMock = createOnboardingMockState();
+let onboardingTestTimer = null;
+let onboardingAccountError = null;
 const deprecatedNotesCache = {};
 const byId = id => document.getElementById(id);
 const tr = key => dictionary[language][key];
+const onboardingAccountErrorKeys = Object.freeze({
+  displayNameRequired: "onboardingErrorDisplayNameRequired",
+  displayNameTooLong: "onboardingErrorDisplayNameTooLong",
+  passwordTooShort: "onboardingErrorPasswordTooShort",
+  passwordMismatch: "onboardingErrorPasswordMismatch",
+  termsRequired: "onboardingErrorTermsRequired",
+  playerIdInvalid: "onboardingErrorPlayerIdInvalid",
+  passwordRequired: "onboardingErrorPasswordRequired"
+});
 
 function applyLanguage() {
   document.documentElement.lang = language;
@@ -216,6 +375,9 @@ function applyLanguage() {
     element.setAttribute("aria-label", tr(element.dataset.i18nAriaLabel));
     element.title = tr(element.dataset.i18nAriaLabel);
   });
+  document.querySelectorAll("[data-i18n-placeholder]").forEach(element => {
+    element.placeholder = tr(element.dataset.i18nPlaceholder);
+  });
   byId("language-label").textContent = language === "ja" ? "日本語" : "English";
   byId("language").setAttribute("aria-label", tr("switchLanguage"));
   byId("language").title = tr("switchLanguage");
@@ -224,6 +386,7 @@ function applyLanguage() {
   renderDeprecated();
   renderPlugins();
   renderSettings();
+  renderOnboardingMock();
 }
 
 function renderSettings() {
@@ -264,6 +427,164 @@ async function saveSetting(key, value) {
 
 function openDialog(dialog) {
   if (!dialog.open) dialog.showModal();
+}
+
+function renderOnboardingMock() {
+  const completed = completedOnboardingMockSteps(onboardingMock);
+  byId("onboarding-progress-count").textContent = `${completed} / 4`;
+  ONBOARDING_MOCK_STAGES.forEach(stage => {
+    const item = document.querySelector(`[data-onboarding-step="${stage}"]`);
+    item.dataset.state = onboardingMockStepState(onboardingMock, stage);
+    byId(`onboarding-${stage}`).hidden = onboardingMock.stage !== stage;
+  });
+
+  const existingAccount = onboardingMock.accountMode === "existing";
+  const newAccountTab = byId("onboarding-new-account");
+  const existingAccountTab = byId("onboarding-existing-account");
+  newAccountTab.setAttribute("aria-selected", String(!existingAccount));
+  existingAccountTab.setAttribute("aria-selected", String(existingAccount));
+  newAccountTab.tabIndex = existingAccount ? -1 : 0;
+  existingAccountTab.tabIndex = existingAccount ? 0 : -1;
+  byId("onboarding-new-account-fields").hidden = existingAccount;
+  byId("onboarding-existing-account-fields").hidden = !existingAccount;
+  byId("onboarding-submit-account").textContent = tr(
+    existingAccount ? "onboardingLoginAndContinue" : "onboardingCreateAndContinue"
+  );
+  const accountError = byId("onboarding-account-error");
+  accountError.hidden = !onboardingAccountError;
+  accountError.textContent = onboardingAccountError
+    ? tr(onboardingAccountErrorKeys[onboardingAccountError])
+    : "";
+
+  const checkStatus = onboardingMock.connectionPassed
+    ? "onboardingCheckPassed"
+    : (onboardingMock.connectionTesting ? "onboardingCheckTesting" : "onboardingCheckPending");
+  ["account", "plugin", "arena"].forEach(check => {
+    const element = byId(`onboarding-check-${check}`);
+    element.textContent = tr(checkStatus);
+    element.dataset.state = onboardingMock.connectionPassed
+      ? "complete"
+      : (onboardingMock.connectionTesting ? "testing" : "pending");
+  });
+  byId("onboarding-test-connection").disabled = onboardingMock.connectionTesting;
+
+  const accountLabel = onboardingMock.accountLinked
+    ? `${onboardingMock.accountName} / ${onboardingMock.accountId}`
+    : "BMSIR_MOCK / 190000";
+  byId("onboarding-ready-account").textContent = accountLabel;
+  byId("onboarding-ready-profile").textContent = onboardingMock.profileId;
+  const launchable = canLaunch();
+  byId("onboarding-launch-hint").textContent = tr(
+    onboardingMock.launchUnavailable
+      ? "onboardingLaunchBlocked"
+      : (launchable ? "onboardingLaunchReady" : "onboardingLaunchUnavailable")
+  );
+  byId("onboarding-launch-hint").dataset.kind = onboardingMock.launchUnavailable
+    ? "warning"
+    : (launchable ? "ok" : "neutral");
+
+  const accountSummary = byId("account-summary");
+  const accountBadge = byId("account-badge");
+  const setupButton = byId("onboarding-open");
+  if (!onboardingMock.accountLinked) {
+    accountSummary.textContent = tr("accountNotLinked");
+    setBadge(accountBadge, "warning", tr("accountSetupNeeded"));
+    setupButton.textContent = tr("accountSetup");
+  } else {
+    accountSummary.textContent = accountLabel;
+    setBadge(
+      accountBadge,
+      onboardingMock.connectionPassed ? "ok" : "available",
+      tr(onboardingMock.connectionPassed ? "accountMockReady" : "accountMockLinked")
+    );
+    setupButton.textContent = tr("accountReview");
+  }
+}
+
+function updateOnboardingMock(event) {
+  const previousStage = onboardingMock.stage;
+  onboardingMock = reduceOnboardingMock(onboardingMock, event);
+  renderOnboardingMock();
+  if (onboardingMock.stage !== previousStage) byId("onboarding-content").scrollTop = 0;
+}
+
+function selectOnboardingAccountMode(mode) {
+  onboardingAccountError = null;
+  clearOnboardingPasswords();
+  updateOnboardingMock({type: "SELECT_ACCOUNT_MODE", mode});
+}
+
+function moveOnboardingAccountMode(event) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  event.preventDefault();
+  const mode = event.key === "ArrowLeft" || event.key === "Home" ? "new" : "existing";
+  selectOnboardingAccountMode(mode);
+  byId(mode === "new" ? "onboarding-new-account" : "onboarding-existing-account").focus();
+}
+
+function clearOnboardingPasswords() {
+  byId("onboarding-new-password").value = "";
+  byId("onboarding-new-password-confirm").value = "";
+  byId("onboarding-existing-password").value = "";
+}
+
+function submitOnboardingAccount(event) {
+  event.preventDefault();
+  const existingAccount = onboardingMock.accountMode === "existing";
+  const result = validateOnboardingMockAccount(existingAccount
+    ? {
+        mode: "existing",
+        playerId: byId("onboarding-player-id").value,
+        password: byId("onboarding-existing-password").value
+      }
+    : {
+        mode: "new",
+        displayName: byId("onboarding-display-name").value,
+        password: byId("onboarding-new-password").value,
+        passwordConfirmation: byId("onboarding-new-password-confirm").value,
+        termsAccepted: byId("onboarding-accept-terms").checked
+      });
+  if (!result.valid) {
+    onboardingAccountError = result.error;
+    renderOnboardingMock();
+    return;
+  }
+  onboardingAccountError = null;
+  clearOnboardingPasswords();
+  updateOnboardingMock({
+    type: "COMPLETE_ACCOUNT",
+    accountId: result.accountId,
+    accountName: result.accountName
+  });
+}
+
+function runOnboardingConnectionTest() {
+  updateOnboardingMock({type: "START_CONNECTION_TEST"});
+  if (!onboardingMock.connectionTesting) return;
+  if (onboardingTestTimer) window.clearTimeout(onboardingTestTimer);
+  onboardingTestTimer = window.setTimeout(() => {
+    onboardingTestTimer = null;
+    updateOnboardingMock({type: "COMPLETE_CONNECTION_TEST"});
+  }, 700);
+}
+
+function resetOnboardingMock() {
+  if (onboardingTestTimer) window.clearTimeout(onboardingTestTimer);
+  onboardingTestTimer = null;
+  onboardingAccountError = null;
+  byId("onboarding-account-form").reset();
+  clearOnboardingPasswords();
+  updateOnboardingMock({type: "RESET"});
+  byId("onboarding-content").scrollTop = 0;
+}
+
+function launchFromOnboardingMock() {
+  if (!canLaunch()) {
+    updateOnboardingMock({type: "MARK_LAUNCH_UNAVAILABLE"});
+    return;
+  }
+  byId("onboarding-dialog").close();
+  launch(false);
 }
 
 function renderPlugins() {
@@ -706,6 +1027,7 @@ function renderUpdate() {
   renderReleasePanel();
   renderAnnouncements();
   renderDeprecated();
+  renderOnboardingMock();
   if (installingUpdate) {
     setStatus(tr(update?.status === "install_required" ? "installing" : "updating"), "available");
     return;
@@ -889,11 +1211,26 @@ byId("release-notes-open").addEventListener("click", () => openDialog(byId("rele
 byId("release-dialog-close").addEventListener("click", () => byId("release-dialog").close());
 byId("settings-open").addEventListener("click", () => openDialog(byId("settings-dialog")));
 byId("settings-close").addEventListener("click", () => byId("settings-dialog").close());
+byId("onboarding-open").addEventListener("click", () => openDialog(byId("onboarding-dialog")));
+byId("onboarding-close").addEventListener("click", () => byId("onboarding-dialog").close());
+byId("onboarding-new-account").addEventListener("click", () => selectOnboardingAccountMode("new"));
+byId("onboarding-existing-account").addEventListener("click", () => selectOnboardingAccountMode("existing"));
+byId("onboarding-new-account").addEventListener("keydown", moveOnboardingAccountMode);
+byId("onboarding-existing-account").addEventListener("keydown", moveOnboardingAccountMode);
+byId("onboarding-account-form").addEventListener("submit", submitOnboardingAccount);
+byId("onboarding-configure-profile").addEventListener("click", () => updateOnboardingMock({
+  type: "CONFIGURE_PROFILE",
+  profileId: byId("onboarding-profile-select").value
+}));
+byId("onboarding-test-connection").addEventListener("click", runOnboardingConnectionTest);
+byId("onboarding-launch").addEventListener("click", launchFromOnboardingMock);
+byId("onboarding-reset").addEventListener("click", resetOnboardingMock);
+byId("onboarding-dialog").addEventListener("close", clearOnboardingPasswords);
 byId("resident-state").addEventListener("click", () => saveSetting("resident", !launcherSettings?.resident));
 byId("setting-resident").addEventListener("change", event => saveSetting("resident", event.target.checked));
 byId("setting-background-check").addEventListener("change", event => saveSetting("background_check", event.target.checked));
 byId("setting-autostart").addEventListener("change", event => saveSetting("autostart", event.target.checked));
-[byId("release-dialog"), byId("settings-dialog")].forEach(dialog => {
+[byId("release-dialog"), byId("settings-dialog"), byId("onboarding-dialog")].forEach(dialog => {
   dialog.addEventListener("click", event => {
     const bounds = dialog.getBoundingClientRect();
     const inside = event.clientX >= bounds.left && event.clientX <= bounds.right

@@ -13,6 +13,15 @@ normal actions in the order users need them:
 - open the existing pre-launch configuration with `-c`
 - launch Arena
 
+The account card currently includes a clearly labeled, session-only onboarding
+mock. New registration and existing-account sign-in are presented directly in
+the launcher, followed by local-profile setup, a connection test, and launch
+handoff. The mock validates the form locally but never creates an account,
+sends or saves input, retains a password in its state, changes player
+configuration, or calls an account API. The last mock action delegates to the
+real launcher command only when the installed game, Java runtime, plugin, and
+update policy already permit launch.
+
 The update check and advanced version/plugin controls remain available below.
 When an update exists, the body and launcher cards show their installed and
 available versions independently. Users can update either component or apply
