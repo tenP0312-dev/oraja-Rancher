@@ -25,6 +25,10 @@ jobs:
       RELEASE_TAG: ${{ inputs.release_tag || 'test-launcher-0.2.22' }}
       PREVIOUS_RELEASE_TAG: ${{ inputs.previous_release_tag || 'test-launcher-0.2.21' }}
     steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
       - name: Verify long-name channel selection and native self-update
         shell: pwsh
         run: |
