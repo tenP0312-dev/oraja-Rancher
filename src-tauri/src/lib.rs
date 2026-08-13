@@ -199,9 +199,9 @@ async fn downgrade_to_version(app: AppHandle, version: String) -> Result<String,
 }
 
 #[tauri::command]
-async fn check_plugin_update() -> Result<Option<update::PluginRelease>, String> {
+async fn check_plugin_update() -> Result<update::PluginStatus, String> {
     let root = install::launcher_install_root().map_err(|error| error.to_string())?;
-    tauri::async_runtime::spawn_blocking(move || update::plugin_update(&root))
+    tauri::async_runtime::spawn_blocking(move || update::plugin_status(&root))
         .await
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())

@@ -5,7 +5,7 @@ const dictionary = {
   ja: {
     checking: "更新を確認しています",
     current: "すべて最新です",
-    allCurrentDescription: "本体とランチャーは最新の状態です",
+    allCurrentDescription: "本体、ランチャー、プラグインは最新の状態です",
     updatesAvailable: "更新があります",
     unavailable: "更新を確認できませんでした。現在の本体は起動できます",
     unavailableNoInstall: "セットアップファイルを取得できませんでした",
@@ -18,6 +18,7 @@ const dictionary = {
     updateAll: "すべて更新",
     updateBody: "本体を更新",
     updateLauncher: "ランチャーを更新",
+    updatePlugin: "プラグインを更新",
     updateLaunch: "更新して起動",
     installLaunch: "ダウンロードして起動",
     launchCurrent: "現在の版を起動",
@@ -65,6 +66,7 @@ const dictionary = {
     noReleaseNotes: "この版のリリースノートはありません",
     statusBody: "本体",
     statusLauncher: "ランチャー",
+    statusPlugin: "プラグイン",
     statusChecking: "確認中",
     statusUpToDate: "最新",
     statusSetupNeeded: "セットアップ必要",
@@ -72,6 +74,8 @@ const dictionary = {
     statusMandatory: "必須更新",
     statusRevoked: "利用停止中",
     statusLauncherTooOld: "ランチャー要更新",
+    statusUnavailable: "確認できません",
+    pluginCheckUnavailable: "プラグインの更新を確認できません",
     pluginToggle: "Arenaプラグインの更新・旧版",
     pluginCurrent: "プラグイン更新あり: {version}",
     pluginCurrentOk: "プラグインは最新です",
@@ -96,7 +100,7 @@ const dictionary = {
   en: {
     checking: "Checking for updates",
     current: "Everything is up to date",
-    allCurrentDescription: "The game and launcher are both up to date",
+    allCurrentDescription: "The game, launcher, and plugin are all up to date",
     updatesAvailable: "Updates are available",
     unavailable: "Could not check for updates. The installed version can still launch",
     unavailableNoInstall: "Could not download the setup information",
@@ -109,6 +113,7 @@ const dictionary = {
     updateAll: "Update all",
     updateBody: "Update game",
     updateLauncher: "Update launcher",
+    updatePlugin: "Update plugin",
     updateLaunch: "Update and launch",
     installLaunch: "Download and launch",
     launchCurrent: "Launch installed version",
@@ -156,6 +161,7 @@ const dictionary = {
     noReleaseNotes: "No release notes are available for this version",
     statusBody: "Body",
     statusLauncher: "Launcher",
+    statusPlugin: "Plugin",
     statusChecking: "Checking",
     statusUpToDate: "Up to date",
     statusSetupNeeded: "Setup needed",
@@ -163,6 +169,8 @@ const dictionary = {
     statusMandatory: "Required update",
     statusRevoked: "Revoked",
     statusLauncherTooOld: "Launcher needs updating",
+    statusUnavailable: "Unavailable",
+    pluginCheckUnavailable: "Could not check for plugin updates",
     pluginToggle: "Arena plugin updates and older versions",
     pluginCurrent: "Plugin update available: {version}",
     pluginCurrentOk: "The plugin is up to date",
@@ -201,7 +209,8 @@ let deprecatedLoading = false;
 let downgradingVersion = null;
 let pluginVisible = false;
 let pluginVersions = null;
-let pluginUpdate = null;
+let pluginStatus = null;
+let pluginUnavailable = false;
 let launcherSettings = null;
 const deprecatedNotesCache = {};
 const byId = id => document.getElementById(id);
@@ -273,9 +282,12 @@ function renderPlugins() {
   toggle.setAttribute("aria-expanded", String(pluginVisible));
   container.hidden = !pluginVisible;
   if (!pluginVisible) return;
-  byId("plugin-current").textContent = pluginUpdate
-    ? tr("pluginCurrent").replace("{version}", pluginVersionLabel(pluginUpdate))
-    : tr("pluginCurrentOk");
+  const pluginUpdate = pluginStatus?.update_available ? pluginStatus.available : null;
+  byId("plugin-current").textContent = pluginUnavailable
+    ? tr("pluginCheckUnavailable")
+    : pluginUpdate
+      ? tr("pluginCurrent").replace("{version}", pluginVersionLabel(pluginUpdate))
+      : tr("pluginCurrentOk");
   const list = byId("plugin-list");
   list.replaceChildren();
   if (pluginUpdate) {
@@ -327,9 +339,11 @@ async function togglePlugins() {
   pluginVisible = !pluginVisible;
   if (pluginVisible && pluginVersions === null) {
     try {
-      [pluginUpdate, pluginVersions] = await Promise.all([
-        invoke("check_plugin_update"), invoke("list_deprecated_plugin_versions")
+      [pluginStatus, pluginVersions] = await Promise.all([
+        pluginStatus ? Promise.resolve(pluginStatus) : invoke("check_plugin_update"),
+        invoke("list_deprecated_plugin_versions")
       ]);
+      pluginUnavailable = false;
     } catch (error) { showError(error); pluginVersions = []; }
   }
   renderPlugins();
@@ -340,9 +354,10 @@ async function installPlugin(version) {
   renderUpdate(); renderProgress();
   try {
     await invoke("install_plugin_version", {version});
-    [pluginUpdate, pluginVersions] = await Promise.all([
+    [pluginStatus, pluginVersions] = await Promise.all([
       invoke("check_plugin_update"), invoke("list_deprecated_plugin_versions")
     ]);
+    pluginUnavailable = false;
     hideError();
   } catch (error) { showError(error); }
   finally { installingUpdate = false; updateProgress = null; renderProgress(); renderPlugins(); renderUpdate(); }
@@ -616,6 +631,13 @@ function setBadge(element, kind, text) {
   element.dataset.kind = kind;
 }
 
+function installedPluginVersion() {
+  const path = pluginStatus?.installed_artifact_path
+    || state?.installation?.plugin_jars?.[0]
+    || "";
+  return path ? pluginVersionLabel({artifact_path: path}) : tr("notInstalledVersion");
+}
+
 function renderStatusCards() {
   if (!state) return;
   const installed = Boolean(state.installation_ready);
@@ -624,6 +646,7 @@ function renderStatusCards() {
   const bodyBadge = byId("body-badge");
   const bodyUpdate = Boolean(update?.body_update_available);
   const launcherUpdate = Boolean(update?.launcher_update_available);
+  const pluginUpdate = Boolean(pluginStatus?.update_available);
 
   if (checking) {
     bodyLine.textContent = installedVersion;
@@ -662,11 +685,29 @@ function renderStatusCards() {
   } else {
     setBadge(byId("launcher-badge"), "ok", tr("statusUpToDate"));
   }
+
+  const installedPlugin = installedPluginVersion();
+  const availablePlugin = pluginStatus ? pluginVersionLabel(pluginStatus.available) : "";
+  if (checking) {
+    byId("plugin-version-line").textContent = installedPlugin;
+    setBadge(byId("plugin-badge"), "neutral", tr("statusChecking"));
+  } else if (pluginUnavailable || !pluginStatus) {
+    byId("plugin-version-line").textContent = installedPlugin;
+    setBadge(byId("plugin-badge"), "warning", tr("statusUnavailable"));
+  } else if (pluginUpdate) {
+    byId("plugin-version-line").textContent = `${installedPlugin} → ${availablePlugin}`;
+    setBadge(byId("plugin-badge"), "available", tr("statusUpdateAvailable"));
+  } else {
+    byId("plugin-version-line").textContent = availablePlugin;
+    setBadge(byId("plugin-badge"), "ok", tr("statusUpToDate"));
+  }
   const partialBlocked = updateBlocksLaunch() || update?.status === "install_required";
   byId("body-update").hidden = !bodyUpdate || !installed || partialBlocked;
   byId("launcher-update").hidden = !launcherUpdate || partialBlocked;
+  byId("plugin-update").hidden = !pluginUpdate;
   byId("body-update").disabled = checking || installingUpdate;
   byId("launcher-update").disabled = checking || installingUpdate;
+  byId("plugin-update").disabled = checking || installingUpdate;
 }
 
 function renderReleasePanel() {
@@ -688,11 +729,15 @@ function renderUpdate() {
   if (!state) return;
   const installed = Boolean(state.installation_ready);
   const blocked = updateBlocksLaunch();
-  const hasUpdates = Boolean(update?.body_update_available || update?.launcher_update_available);
-  const allCurrent = Boolean(update) && !hasUpdates;
-  byId("installation-status").textContent = allCurrent
-    ? tr("allCurrentDescription")
-    : (installed ? tr("ready") : tr("notInstalled"));
+  const mainUpdates = Boolean(update?.body_update_available || update?.launcher_update_available);
+  const pluginUpdate = Boolean(pluginStatus?.update_available);
+  const hasUpdates = mainUpdates || pluginUpdate;
+  const allCurrent = Boolean(update && pluginStatus) && !hasUpdates && !pluginUnavailable;
+  byId("installation-status").textContent = pluginUnavailable && installed
+    ? tr("pluginCheckUnavailable")
+    : allCurrent
+      ? tr("allCurrentDescription")
+      : (installed ? tr("ready") : tr("notInstalled"));
   byId("play").disabled = !canLaunch();
   byId("configure").disabled = !canLaunch();
   byId("check").disabled = checking || installingUpdate || launching;
@@ -706,6 +751,7 @@ function renderUpdate() {
   renderReleasePanel();
   renderAnnouncements();
   renderDeprecated();
+  renderPlugins();
   if (installingUpdate) {
     setStatus(tr(update?.status === "install_required" ? "installing" : "updating"), "available");
     return;
@@ -724,6 +770,11 @@ function renderUpdate() {
       return;
     }
     setStatus(tr(updateUnavailable ? (installed ? "unavailable" : "unavailableNoInstall") : "current"), updateUnavailable ? "warning" : "ok");
+    return;
+  }
+
+  if (pluginUnavailable && !mainUpdates) {
+    setStatus(tr("pluginCheckUnavailable"), "warning");
     return;
   }
 
@@ -773,20 +824,32 @@ async function checkUpdate() {
   }
   checking = true;
   updateUnavailable = false;
+  pluginUnavailable = false;
   renderUpdate();
-  try {
-    update = await invoke("check_online_update");
+  const [updateResult, pluginResult] = await Promise.allSettled([
+    invoke("check_online_update"),
+    invoke("check_plugin_update")
+  ]);
+  const errors = [];
+  if (updateResult.status === "fulfilled") {
+    update = updateResult.value;
     state.cached_update = update;
     state.cached_policy_invalid = false;
-    hideError();
-  } catch (error) {
+  } else {
     update = state.cached_update || update;
     updateUnavailable = true;
-    showError(error);
-  } finally {
-    checking = false;
-    renderUpdate();
+    errors.push(updateResult.reason);
   }
+  if (pluginResult.status === "fulfilled") {
+    pluginStatus = pluginResult.value;
+  } else {
+    pluginUnavailable = true;
+    errors.push(pluginResult.reason);
+  }
+  if (errors.length) showError(errors.join("\n"));
+  else hideError();
+  checking = false;
+  renderUpdate();
 }
 
 function showError(error) {
@@ -854,7 +917,13 @@ async function installSelected(target) {
   renderProgress();
   setStatus(tr(update?.status === "install_required" ? "installing" : "updating"), "available");
   try {
-    await invoke("install_online_update", {target, launchAfter: false});
+    const mainUpdateAvailable = Boolean(update?.body_update_available || update?.launcher_update_available);
+    if (target === "all" && pluginStatus?.update_available) {
+      await invoke("install_plugin_version", {version: pluginStatus.available.version});
+    }
+    if (mainUpdateAvailable || target !== "all") {
+      await invoke("install_online_update", {target, launchAfter: false});
+    }
     await loadState();
     if (state) await checkUpdate();
     installingUpdate = false;
@@ -882,6 +951,9 @@ byId("check").addEventListener("click", checkUpdate);
 byId("update-all").addEventListener("click", () => installSelected("all"));
 byId("body-update").addEventListener("click", () => installSelected("body"));
 byId("launcher-update").addEventListener("click", () => installSelected("launcher"));
+byId("plugin-update").addEventListener("click", () => {
+  if (pluginStatus?.available?.version) installPlugin(pluginStatus.available.version);
+});
 byId("launch-current").addEventListener("click", () => launch(false));
 byId("deprecated-toggle").addEventListener("click", toggleDeprecated);
 byId("plugin-toggle").addEventListener("click", togglePlugins);

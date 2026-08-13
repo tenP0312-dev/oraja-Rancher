@@ -6,11 +6,12 @@ There is no installer, MSI, registry write, administrator requirement, Start
 Menu registration, or folder picker. Existing BAT and command launch remain
 valid.
 
-When the installation is current, the first action row exposes the three
+When the installation is current, the first action row exposes the four
 normal actions in the order users need them:
 
 - view the signed release notes
 - open the existing pre-launch configuration with `-c`
+- check for updates
 - launch Arena
 
 The update check and advanced version/plugin controls remain available below.
@@ -63,12 +64,17 @@ launcher-only releases that contain no `Arena-oraja.jar`. A downgrade replaces
 only that JAR with rollback protection; Java, plugins, launcher settings,
 skins, replays, and player databases remain untouched.
 
-The Arena plugin is checked independently against the signed current manifest.
-Its panel lists distinct plugin artifacts from signed historical releases,
-shows the plugin version together with the body release that carried it, and
-loads that release's verified notes on demand. Applying either the current or
-an older plugin replaces only the single `ir/bms_ir*.jar` transactionally;
-settings, skins, replays, score databases, Java, and the body JAR are preserved.
+The Arena plugin has its own main status card below the body and launcher. The
+launcher resolves the newest plugin-bearing release from signed history even
+when the current body manifest is a sparse body-only or launcher-only delta,
+then compares the installed JAR bytes with that signed artifact. An available
+plugin update can be applied from the card or together with the other available
+updates. The advanced panel lists the remaining distinct historical plugin
+artifacts, shows each plugin version together with the body release that
+carried it, and loads that release's verified notes on demand. Applying either
+the newest or an older plugin replaces only the single `ir/bms_ir*.jar`
+transactionally; settings, skins, replays, score databases, Java, and the body
+JAR are preserved.
 
 Before launching, the launcher validates canonical Java, body-JAR, and root
 paths. Only at the Java process boundary it converts compatible Windows

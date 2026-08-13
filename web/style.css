@@ -102,8 +102,8 @@ p { margin: 5px 0 0; color: #536058; }
   font-size: 12px;
 }
 .actions { display: flex; flex-wrap: wrap; gap: 10px; }
-.primary-actions { padding-bottom: 2px; }
-.secondary-actions { display: flex; justify-content: flex-end; }
+.primary-actions { flex-wrap: nowrap; padding-bottom: 2px; }
+.primary-actions button { padding-inline: 12px; white-space: nowrap; }
 button {
   min-height: 42px;
   padding: 9px 15px;
