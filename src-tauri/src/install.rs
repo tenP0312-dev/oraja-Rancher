@@ -19,6 +19,7 @@ const UPDATE_HELPER: &str = if cfg!(windows) {
 } else {
     ".bmsir-launcher-update-helper"
 };
+const LAUNCH_LOG_DIRECTORY: &str = "logs";
 const LAUNCH_LOG_FILE: &str = "arena-launch.log";
 const SHORT_LIVED_LAUNCH_SECONDS: u64 = 5;
 
@@ -745,6 +746,29 @@ fn launch_timestamp_millis() -> u128 {
         .as_millis()
 }
 
+fn launch_log_path(root: &Path) -> Result<PathBuf, InstallError> {
+    let directory = root.join(LAUNCH_LOG_DIRECTORY);
+    match directory.symlink_metadata() {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            return Err(InstallError::UnsafeFilesystemPath);
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            fs::create_dir(&directory).map_err(|source| InstallError::LaunchLog {
+                path: display_path(&directory),
+                source,
+            })?;
+        }
+        Err(source) => {
+            return Err(InstallError::LaunchLog {
+                path: display_path(&directory),
+                source,
+            });
+        }
+    }
+    Ok(directory.join(LAUNCH_LOG_FILE))
+}
+
 fn open_launch_log(log_path: &Path) -> Result<File, InstallError> {
     match log_path.symlink_metadata() {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
@@ -811,7 +835,7 @@ where
     let launch_game_jar = process_boundary_path(&game_jar);
     let arguments = game_arguments(&launch_root, &launch_game_jar, configuration);
     let mode = launch_mode(configuration);
-    let log_path = root.join(LAUNCH_LOG_FILE);
+    let log_path = launch_log_path(&root)?;
     let mut log = open_launch_log(&log_path)?;
     let command_record = format!(
         "ts={} event=launch_requested mode={} java_source={} java={:?} cwd={:?} jar={:?} args={:?}",
@@ -1261,6 +1285,12 @@ exit {exit_code}
         assert!(capture.contains(&format!("arg={}", canonical_game.display())));
         assert!(capture.contains("arg=-s"));
 
+        assert_eq!(
+            Path::new(&info.log_path),
+            canonical_root
+                .join(LAUNCH_LOG_DIRECTORY)
+                .join(LAUNCH_LOG_FILE)
+        );
         let log = fs::read_to_string(&info.log_path).unwrap();
         assert!(log.contains("event=launch_requested mode=play java_source=bundled"));
         assert!(log.contains("event=spawned mode=play"));
@@ -1293,6 +1323,23 @@ exit {exit_code}
         let log = fs::read_to_string(&info.log_path).unwrap();
         assert!(log.contains("event=launch_requested mode=configuration"));
         assert!(log.contains("exit_code=Some(23) success=false"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn launch_rejects_a_symlinked_log_directory() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let java = write_fake_java(root.path(), 0);
+        let game = root.path().join(CANONICAL_GAME_JAR);
+        fs::write(&game, b"not a real jar").unwrap();
+        symlink(outside.path(), root.path().join(LAUNCH_LOG_DIRECTORY)).unwrap();
+
+        let result = launch_with_source(root.path(), &java, "bundled", &game, false, |_| {});
+
+        assert!(matches!(result, Err(InstallError::UnsafeFilesystemPath)));
     }
 
     #[test]

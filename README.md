@@ -80,9 +80,11 @@ Before launching, the launcher validates canonical Java, body-JAR, and root
 paths. Only at the Java process boundary it converts compatible Windows
 extended-length paths such as `\\?\C:\...` back to their ordinary form, so the
 JVM does not receive a path format it may reject. Each launch appends its mode,
-Java source, PID, stdout/stderr, and exit result to `arena-launch.log` in the
-portable root. Tray residency, daily background update checks, and launch at
-login are opt-in portable settings. With residency enabled, launching Arena
+Java source, PID, stdout/stderr, and exit result to `logs/arena-launch.log` in
+the portable root. The launcher creates `logs/` automatically; existing
+root-level logs from older launcher versions are left in place. Tray residency,
+daily background update checks, and launch at login are opt-in portable
+settings. With residency enabled, launching Arena
 hides the window and keeps the tray and launch monitor alive; with it disabled,
 a normal Arena launch exits the launcher. Pre-launch configuration keeps the
 launcher available. A resident launcher shows a diagnostic with the log path
