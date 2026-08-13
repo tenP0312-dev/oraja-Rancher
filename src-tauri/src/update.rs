@@ -2647,7 +2647,10 @@ mod tests {
             status.available.artifact_path,
             "ir/bms_ir_arena_oraja_0.0.69.jar"
         );
-        assert_eq!(status.installed_artifact_path.as_deref(), renamed.to_str());
+        assert_eq!(
+            status.installed_artifact_path.as_deref().map(Path::new),
+            Some(renamed.as_path())
+        );
         assert!(!status.update_available);
     }
 
