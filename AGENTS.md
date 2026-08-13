@@ -8,6 +8,9 @@ the code/tests around the affected behavior before editing.
 - Preserve unrelated changes and avoid destructive Git commands.
 - Use an Issue, a scoped `codex/` branch, validation, a pull request, and
   passing CI for implementation work. Keep `main` protected.
+- Use the configured `gh` CLI from the first request for GitHub write actions,
+  including Issues and pull requests. Do not probe the connected GitHub app
+  first; its write path for this repository is already known to return `403`.
 - Use `apply_patch` for manual edits. Do not commit binaries, generated release
   trees, credentials, signing material, game data, databases, or logs.
 - Run `cargo test --locked` under `src-tauri` for code changes and
