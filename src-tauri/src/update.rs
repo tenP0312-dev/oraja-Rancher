@@ -69,6 +69,8 @@ pub enum UpdateError {
     DowngradeInstallationNotReady,
     #[error("the selected release does not contain the game JAR")]
     DowngradeArtifactMissing,
+    #[error("signed release history does not contain an Arena plugin")]
+    PluginReleaseMissing,
     #[error("the selected component has no available update")]
     SelectedComponentCurrent,
     #[error(transparent)]
@@ -583,6 +585,54 @@ pub struct PluginRelease {
     pub artifact_path: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct PluginStatus {
+    pub installed_artifact_path: Option<String>,
+    pub available: PluginRelease,
+    pub update_available: bool,
+}
+
+fn plugin_release(manifest: &ReleaseManifest) -> Option<(PluginRelease, ReleaseArtifact)> {
+    let artifact = release_plugin_artifact(manifest)?.clone();
+    Some((
+        PluginRelease {
+            version: manifest.version.clone(),
+            published_at: manifest.published_at.clone(),
+            artifact_path: artifact.path.clone(),
+        },
+        artifact,
+    ))
+}
+
+fn latest_plugin_release_from(
+    base_url: &str,
+    public_key: &str,
+    selected_channel: &str,
+    selected_platform: &str,
+) -> Result<(PluginRelease, ReleaseArtifact), UpdateError> {
+    let (_, current) =
+        fetch_release_from(base_url, public_key, selected_channel, selected_platform)?;
+    if let Some(release) = plugin_release(&current) {
+        return Ok(release);
+    }
+    for entry in fetch_history_from(base_url, public_key, selected_channel, selected_platform)? {
+        if entry.version == current.version {
+            continue;
+        }
+        let manifest = fetch_versioned_manifest_from(
+            base_url,
+            public_key,
+            selected_channel,
+            selected_platform,
+            &entry.version,
+        )?;
+        if let Some(release) = plugin_release(&manifest) {
+            return Ok(release);
+        }
+    }
+    Err(UpdateError::PluginReleaseMissing)
+}
+
 pub fn list_deprecated_plugin_versions() -> Result<Vec<PluginRelease>, UpdateError> {
     list_deprecated_plugin_versions_from(
         update_base_url()?,
@@ -602,8 +652,10 @@ fn list_deprecated_plugin_versions_from(
         fetch_release_from(base_url, public_key, selected_channel, selected_platform)?;
     let mut result = Vec::new();
     let mut seen_plugin_hashes = HashSet::new();
-    if let Some(artifact) = release_plugin_artifact(&current) {
+    let mut newest_plugin_found = false;
+    if let Some((_, artifact)) = plugin_release(&current) {
         seen_plugin_hashes.insert(artifact.sha256.to_ascii_lowercase());
+        newest_plugin_found = true;
     }
     for entry in fetch_history_from(base_url, public_key, selected_channel, selected_platform)? {
         if entry.version == current.version {
@@ -616,33 +668,50 @@ fn list_deprecated_plugin_versions_from(
             selected_platform,
             &entry.version,
         )?;
-        if let Some(artifact) = release_plugin_artifact(&manifest) {
+        if let Some((release, artifact)) = plugin_release(&manifest) {
             if !seen_plugin_hashes.insert(artifact.sha256.to_ascii_lowercase()) {
                 continue;
             }
-            result.push(PluginRelease {
-                version: entry.version,
-                published_at: entry.published_at,
-                artifact_path: artifact.path.clone(),
-            });
+            if !newest_plugin_found {
+                newest_plugin_found = true;
+                continue;
+            }
+            result.push(release);
         }
     }
     Ok(result)
 }
 
-pub fn plugin_update(root: &Path) -> Result<Option<PluginRelease>, UpdateError> {
-    let (_, manifest) = fetch_release()?;
-    let Some(artifact) = release_plugin_artifact(&manifest) else {
-        return Ok(None);
+pub fn plugin_status(root: &Path) -> Result<PluginStatus, UpdateError> {
+    plugin_status_from(
+        update_base_url()?,
+        release_public_key()?,
+        &channel(),
+        platform(),
+        root,
+    )
+}
+
+fn plugin_status_from(
+    base_url: &str,
+    public_key: &str,
+    selected_channel: &str,
+    selected_platform: &str,
+    root: &Path,
+) -> Result<PluginStatus, UpdateError> {
+    let (available, artifact) =
+        latest_plugin_release_from(base_url, public_key, selected_channel, selected_platform)?;
+    let installation = crate::install::inspect(root)?;
+    let installed_artifact_path = installation.plugin_jars.first().cloned();
+    let update_available = match installed_artifact_path.as_deref() {
+        Some(path) => !path_matches_artifact(Path::new(path), &artifact),
+        None => true,
     };
-    if artifact_matches(root, artifact) {
-        return Ok(None);
-    }
-    Ok(Some(PluginRelease {
-        version: manifest.version.clone(),
-        published_at: manifest.published_at.clone(),
-        artifact_path: artifact.path.clone(),
-    }))
+    Ok(PluginStatus {
+        installed_artifact_path,
+        available,
+        update_available,
+    })
 }
 
 pub fn install_plugin_version<F>(
@@ -1148,8 +1217,7 @@ pub fn check_installation(
     Ok(update)
 }
 
-fn artifact_matches(root: &Path, artifact: &ReleaseArtifact) -> bool {
-    let path = root.join(&artifact.path);
+fn path_matches_artifact(path: &Path, artifact: &ReleaseArtifact) -> bool {
     if !path.is_file()
         || path
             .symlink_metadata()
@@ -1169,7 +1237,11 @@ fn artifact_matches(root: &Path, artifact: &ReleaseArtifact) -> bool {
             }
         }
     }
-    verify_file(&path, artifact).is_ok()
+    verify_file(path, artifact).is_ok()
+}
+
+fn artifact_matches(root: &Path, artifact: &ReleaseArtifact) -> bool {
+    path_matches_artifact(&root.join(&artifact.path), artifact)
 }
 
 fn artifacts_match(left: &ReleaseArtifact, right: &ReleaseArtifact) -> bool {
@@ -2494,6 +2566,134 @@ mod tests {
         assert_eq!(releases.len(), 1);
         assert_eq!(releases[0].version, "0.4.14.23");
         assert_eq!(releases[0].artifact_path, "IR/bms_ir_arena_0.0.69.jar");
+    }
+
+    #[test]
+    fn plugin_status_uses_newest_plugin_bearing_history_release_and_compares_bytes() {
+        let signing = SigningKey::from_bytes(&[57_u8; 32]);
+        let history = signed_history_bytes(
+            &signing,
+            "test",
+            "windows-x64",
+            &[
+                ("0.4.14.37", "2026-08-12T20:00:00Z"),
+                ("0.4.14.36", "2026-08-12T14:00:00Z"),
+                ("0.4.14.25", "2026-08-09T02:00:00Z"),
+            ],
+        );
+        let current = signed_downgrade_manifest_bytes(
+            &signing,
+            "test",
+            "windows-x64",
+            "0.4.14.37",
+            "0.2.0",
+            vec![game_jar_artifact(b"current-body")],
+        );
+        let body_only = signed_downgrade_manifest_bytes(
+            &signing,
+            "test",
+            "windows-x64",
+            "0.4.14.36",
+            "0.2.0",
+            vec![game_jar_artifact(b"older-body")],
+        );
+        let plugin_bytes = b"newest-signed-plugin";
+        let plugin_release = signed_downgrade_manifest_bytes(
+            &signing,
+            "test",
+            "windows-x64",
+            "0.4.14.25",
+            "0.2.0",
+            vec![plugin_artifact(
+                "ir/bms_ir_arena_oraja_0.0.69.jar",
+                plugin_bytes,
+            )],
+        );
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = serve_sequential_responses(
+            listener,
+            vec![
+                ("/channels/test/windows-x64/manifest.json", current),
+                ("/channels/test/windows-x64/history.json", history),
+                (
+                    "/channels/test/windows-x64/manifests/0.4.14.36.json",
+                    body_only,
+                ),
+                (
+                    "/channels/test/windows-x64/manifests/0.4.14.25.json",
+                    plugin_release,
+                ),
+            ],
+        );
+
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("ir")).unwrap();
+        let renamed = root.path().join("ir/bms_ir_arena_oraja_renamed.jar");
+        fs::write(&renamed, plugin_bytes).unwrap();
+        let status = plugin_status_from(
+            &format!("http://{address}"),
+            &STANDARD.encode(signing.verifying_key().to_bytes()),
+            "test",
+            "windows-x64",
+            root.path(),
+        )
+        .unwrap();
+        server.join().unwrap();
+
+        assert_eq!(status.available.version, "0.4.14.25");
+        assert_eq!(
+            status.available.artifact_path,
+            "ir/bms_ir_arena_oraja_0.0.69.jar"
+        );
+        assert_eq!(
+            status.installed_artifact_path.as_deref().map(Path::new),
+            Some(renamed.as_path())
+        );
+        assert!(!status.update_available);
+    }
+
+    #[test]
+    fn plugin_status_marks_different_installed_bytes_as_update_available() {
+        let signing = SigningKey::from_bytes(&[58_u8; 32]);
+        let current = signed_downgrade_manifest_bytes(
+            &signing,
+            "test",
+            "windows-x64",
+            "0.4.14.38",
+            "0.2.0",
+            vec![plugin_artifact(
+                "ir/bms_ir_arena_oraja_0.0.70.jar",
+                b"new-plugin",
+            )],
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = serve_sequential_responses(
+            listener,
+            vec![("/channels/test/windows-x64/manifest.json", current)],
+        );
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("ir")).unwrap();
+        fs::write(
+            root.path().join("ir/bms_ir_arena_oraja_0.0.69.jar"),
+            b"old-plugin",
+        )
+        .unwrap();
+
+        let status = plugin_status_from(
+            &format!("http://{address}"),
+            &STANDARD.encode(signing.verifying_key().to_bytes()),
+            "test",
+            "windows-x64",
+            root.path(),
+        )
+        .unwrap();
+        server.join().unwrap();
+
+        assert_eq!(status.available.version, "0.4.14.38");
+        assert!(status.update_available);
     }
 
     #[test]

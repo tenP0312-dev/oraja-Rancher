@@ -46,6 +46,16 @@
         <button id="launcher-update" class="small-button" type="button" hidden data-i18n="updateLauncher">ランチャーを更新</button>
       </div>
     </article>
+    <article class="status-card">
+      <div>
+        <p class="status-card-label" data-i18n="statusPlugin">プラグイン</p>
+        <p id="plugin-version-line" class="status-card-version">…</p>
+      </div>
+      <div class="card-action">
+        <span id="plugin-badge" class="status-badge" data-kind="neutral"></span>
+        <button id="plugin-update" class="small-button" type="button" hidden data-i18n="updatePlugin">プラグインを更新</button>
+      </div>
+    </article>
   </section>
 
   <section class="status-band" aria-live="polite">
@@ -64,6 +74,7 @@
   <section id="primary-actions" class="actions primary-actions" aria-label="Primary actions">
     <button id="release-notes-open" type="button" data-i18n="releaseNotesOpen">更新内容を見る</button>
     <button id="configure" type="button" disabled data-i18n="configure">起動前コンフィグ</button>
+    <button id="check" type="button" data-i18n="check">更新を確認</button>
     <button id="play" class="primary" type="button" disabled data-i18n="play">Arenaを起動</button>
     <button id="update-all" class="primary" type="button" hidden data-i18n="updateAll">すべて更新</button>
     <button id="launch-current" type="button" hidden data-i18n="launchCurrent">現在の版で起動</button>
@@ -72,10 +83,6 @@
   <section class="information" aria-labelledby="information-title">
     <h2 id="information-title" data-i18n="information">お知らせ</h2>
     <ul id="announcements" aria-live="polite"><li class="empty-information" data-i18n="noInformation">現在のお知らせはありません</li></ul>
-  </section>
-
-  <section class="secondary-actions">
-    <button id="check" class="quiet" type="button" data-i18n="check">更新を確認</button>
   </section>
 
   <section class="deprecated-panel">
