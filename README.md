@@ -165,3 +165,10 @@ launcher acceptance` with the current and previous patch-server release tags.
 It runs the GitHub-distributed long EXE name against the live signed test
 pointer, then verifies native helper replacement and cleanup in an isolated
 portable root. This is release acceptance, not a substitute for source CI.
+
+If an update makes a BMS-IR-built body or plugin downloadable, including on
+the internal test channel, the release also includes the server repository's
+ordinary-score body/plugin allowlists and Arena client-version/build gates,
+required guarded reloads, and effective verification. Complete those steps
+before promoting the signed channel pointer; launcher-only releases have no
+body/plugin gate to add.
