@@ -545,30 +545,48 @@ pub fn launcher_install_root() -> Result<PathBuf, InstallError> {
 }
 
 pub fn staged_launcher_artifact_path(
-    root: &Path,
+    _root: &Path,
     staging: &Path,
     manifest: &ReleaseManifest,
 ) -> Result<String, InstallError> {
-    let executable = std::env::current_exe()?.canonicalize()?;
-    let root = root.canonicalize()?;
-    let relative = executable
-        .strip_prefix(&root)
-        .map_err(|_| InstallError::LauncherArtifactMissing)?;
-    let normalized = relative.to_string_lossy().replace('\\', "/");
-    let artifact = manifest
+    let canonical_path = match (manifest.platform.as_str(), manifest.channel.as_str()) {
+        ("windows-x64", "stable") => "BMS-IR Arena.exe",
+        ("windows-x64", "test") => "BMS-IR Arena Test.exe",
+        ("macos-arm64", "stable") => "BMS-IR Arena.app/Contents/MacOS/bmsir-arena-launcher",
+        ("macos-arm64", "test") => "BMS-IR Arena Test.app/Contents/MacOS/bmsir-arena-launcher",
+        _ => return Err(InstallError::LauncherArtifactMissing),
+    };
+    let mut matches = manifest
         .artifacts
         .iter()
-        .find(|artifact| artifact.path.eq_ignore_ascii_case(&normalized))
+        .filter(|artifact| artifact.path == canonical_path);
+    let artifact = matches
+        .next()
+        .cloned()
+        .or_else(|| {
+            let mut bootstrap_matches = manifest
+                .bootstrap
+                .as_ref()?
+                .artifacts
+                .iter()
+                .filter(|artifact| artifact.path == canonical_path);
+            let artifact = bootstrap_matches.next()?.clone();
+            bootstrap_matches.next().is_none().then_some(artifact)
+        })
         .ok_or(InstallError::LauncherArtifactMissing)?;
-    if verified_staged_path(&staging.canonicalize()?, artifact)?.is_none() {
+    if matches.next().is_some() {
         return Err(InstallError::LauncherArtifactMissing);
     }
-    Ok(artifact.path.clone())
+    if verified_staged_path(&staging.canonicalize()?, &artifact)?.is_none() {
+        return Err(InstallError::LauncherArtifactMissing);
+    }
+    Ok(artifact.path)
 }
 
 pub fn spawn_self_update(
     staging: &Path,
     manifest_path: &Path,
+    launcher_manifest_path: Option<&Path>,
     manifest: &ReleaseManifest,
     bootstrap_install: bool,
     target: UpdateTarget,
@@ -607,6 +625,7 @@ pub fn spawn_self_update(
         .arg(target.as_argument())
         .arg(if writes_body_version { "1" } else { "0" })
         .arg(if launch_after { "1" } else { "0" })
+        .arg(launcher_manifest_path.unwrap_or_else(|| Path::new("")))
         .spawn()?;
     Ok(())
 }
@@ -615,25 +634,23 @@ pub fn run_self_update_helper(
     root: &Path,
     staging: &Path,
     manifest: &ReleaseManifest,
+    body_version: &str,
     launcher_path: &str,
     bootstrap_install: bool,
-    target: UpdateTarget,
     writes_body_version: bool,
     launch_after: bool,
 ) -> Result<(), InstallError> {
-    let selected_manifest = crate::update::release_for_target(manifest, target)
-        .map_err(|_| InstallError::LauncherArtifactMissing)?;
     let mut last_error = None;
     for _ in 0..40 {
         thread::sleep(Duration::from_millis(250));
-        match apply_staged_mode(root, staging, &selected_manifest, bootstrap_install) {
+        match apply_staged_mode(root, staging, manifest, bootstrap_install) {
             Ok(()) => {
                 let installation = inspect(root)?;
                 if !is_ready(&installation) {
                     return Err(InstallError::InvalidRoot);
                 }
                 if writes_body_version {
-                    write_version_marker(root, &manifest.version)?;
+                    write_version_marker(root, body_version)?;
                 }
                 cleanup_completed_update(root, staging);
                 let mut launcher = Command::new(root.join(launcher_path));
@@ -1351,6 +1368,103 @@ exit {exit_code}
             fs::read_to_string(root.path().join("bmsir-arena-version.txt")).unwrap(),
             "0.4.14\n"
         );
+    }
+
+    #[test]
+    fn staged_windows_launcher_uses_the_signed_canonical_path_not_the_running_name() {
+        let root = tempfile::tempdir().unwrap();
+        let staging = tempfile::tempdir().unwrap();
+        let canonical = "BMS-IR Arena Test.exe";
+        fs::write(staging.path().join(canonical), b"launcher").unwrap();
+        let artifact = |path: &str, bytes: &[u8]| ReleaseArtifact {
+            path: path.into(),
+            sha256: format!("{:x}", Sha256::digest(bytes)),
+            size: bytes.len() as u64,
+            executable: true,
+        };
+        let manifest = ReleaseManifest {
+            schema_version: 1,
+            channel: "test".into(),
+            platform: "windows-x64".into(),
+            version: "0.4.14.37".into(),
+            published_at: "now".into(),
+            release_notes_markdown: String::new(),
+            release_notes_markdown_ja: String::new(),
+            release_notes_markdown_en: String::new(),
+            announcements: vec![],
+            mandatory: false,
+            minimum_launcher_version: "0.2.20".into(),
+            launcher_version: "0.2.23".into(),
+            revoked_versions: vec![],
+            bootstrap: None,
+            artifacts: vec![
+                artifact(canonical, b"launcher"),
+                artifact(
+                    "BMS-IR-Arena-Test-Launcher-0.2.23-windows-x86-64.exe",
+                    b"distributed name",
+                ),
+            ],
+            signature: String::new(),
+        };
+
+        assert_eq!(
+            staged_launcher_artifact_path(root.path(), staging.path(), &manifest).unwrap(),
+            canonical
+        );
+    }
+
+    #[test]
+    fn staged_launcher_rejects_missing_or_ambiguous_canonical_artifacts() {
+        let root = tempfile::tempdir().unwrap();
+        let staging = tempfile::tempdir().unwrap();
+        let artifact = |path: &str| ReleaseArtifact {
+            path: path.into(),
+            sha256: "00".repeat(32),
+            size: 1,
+            executable: true,
+        };
+        let mut manifest = ReleaseManifest {
+            schema_version: 1,
+            channel: "test".into(),
+            platform: "windows-x64".into(),
+            version: "0.4.14.37".into(),
+            published_at: "now".into(),
+            release_notes_markdown: String::new(),
+            release_notes_markdown_ja: String::new(),
+            release_notes_markdown_en: String::new(),
+            announcements: vec![],
+            mandatory: false,
+            minimum_launcher_version: "0.2.20".into(),
+            launcher_version: "0.2.23".into(),
+            revoked_versions: vec![],
+            bootstrap: None,
+            artifacts: vec![artifact(
+                "BMS-IR-Arena-Test-Launcher-0.2.23-windows-x86-64.exe",
+            )],
+            signature: String::new(),
+        };
+        assert!(matches!(
+            staged_launcher_artifact_path(root.path(), staging.path(), &manifest),
+            Err(InstallError::LauncherArtifactMissing)
+        ));
+
+        manifest.artifacts = vec![
+            artifact("BMS-IR Arena Test.exe"),
+            artifact("BMS-IR Arena Test.exe"),
+        ];
+        assert!(matches!(
+            staged_launcher_artifact_path(root.path(), staging.path(), &manifest),
+            Err(InstallError::LauncherArtifactMissing)
+        ));
+
+        manifest.platform = "macos-arm64".into();
+        manifest.artifacts = vec![artifact(
+            "BMS-IR Arena Test.app/Contents/MacOS/BMSIR-Arena-Launcher",
+        )];
+        assert!(matches!(
+            staged_launcher_artifact_path(root.path(), staging.path(), &manifest),
+            Err(InstallError::LauncherArtifactMissing)
+        ));
     }
 
     #[test]

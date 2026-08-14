@@ -103,6 +103,7 @@ async fn install_online_update(
         install::spawn_self_update(
             &prepared.staging,
             &prepared.manifest_path,
+            prepared.launcher_manifest_path.as_deref(),
             &prepared.manifest,
             prepared.bootstrap_install,
             prepared.target,
@@ -505,19 +506,21 @@ pub fn run_self_update_helper_if_requested() -> bool {
             .next()
             .ok_or_else(|| "self-update launcher path is missing".to_string())?;
         let remaining = arguments.collect::<Vec<_>>();
-        let (bootstrap_install, target, writes_body_version, launch_after) =
+        let (bootstrap_install, target, writes_body_version, launch_after, launcher_manifest_path) =
             match remaining.as_slice() {
                 [launch_after] => (
                     false,
                     update::UpdateTarget::All,
                     true,
                     launch_after == std::ffi::OsStr::new("1"),
+                    None,
                 ),
                 [bootstrap, launch_after] => (
                     bootstrap == std::ffi::OsStr::new("1"),
                     update::UpdateTarget::All,
                     true,
                     launch_after == std::ffi::OsStr::new("1"),
+                    None,
                 ),
                 [bootstrap, target, writes_body_version, launch_after] => (
                     bootstrap == std::ffi::OsStr::new("1"),
@@ -525,13 +528,28 @@ pub fn run_self_update_helper_if_requested() -> bool {
                         .ok_or_else(|| "invalid self-update target".to_string())?,
                     writes_body_version == std::ffi::OsStr::new("1"),
                     launch_after == std::ffi::OsStr::new("1"),
+                    None,
+                ),
+                [bootstrap, target, writes_body_version, launch_after, launcher_manifest_path] => (
+                    bootstrap == std::ffi::OsStr::new("1"),
+                    update::UpdateTarget::from_argument(&target.to_string_lossy())
+                        .ok_or_else(|| "invalid self-update target".to_string())?,
+                    writes_body_version == std::ffi::OsStr::new("1"),
+                    launch_after == std::ffi::OsStr::new("1"),
+                    (!launcher_manifest_path.is_empty()).then_some(launcher_manifest_path),
                 ),
                 _ => return Err("unexpected self-update arguments".to_string()),
             };
         let manifest_path_text = manifest_path.to_string_lossy();
         let release = load_verified_manifest(&manifest_path_text)?;
+        let launcher_release = launcher_manifest_path
+            .map(|path| load_verified_manifest(&path.to_string_lossy()))
+            .transpose()?;
+        let selected_release =
+            update::release_for_target_with_launcher(&release, launcher_release.as_ref(), target)
+                .map_err(|error| error.to_string())?;
         let launcher_path_text = launcher_path.to_string_lossy();
-        if !release
+        if !selected_release
             .artifacts
             .iter()
             .any(|artifact| artifact.path.eq_ignore_ascii_case(&launcher_path_text))
@@ -541,10 +559,10 @@ pub fn run_self_update_helper_if_requested() -> bool {
         install::run_self_update_helper(
             Path::new(&root),
             Path::new(&staging),
-            &release,
+            &selected_release,
+            &release.version,
             &launcher_path_text,
             bootstrap_install,
-            target,
             writes_body_version,
             launch_after,
         )
