@@ -36,11 +36,16 @@ renaming a Windows executable cannot redirect it to another channel.
 Unconfigured development builds fall back to the executable name: `BMS-IR
 Arena.exe` reads `stable`; `BMS-IR Arena Test.exe` reads `test`, so separate
 folders can coexist. The equivalent macOS app bundle names select the same
-fallback channels. The signed manifest may declare `launcher_version`; the
-matching platform launcher artifact is required in that release, so a current
-body can still discover and install a newer launcher. Older manifests without this
-field remain readable and simply do not advertise an independent launcher
-update. Network failure does not newly block a valid installed body. Once a
+fallback channels. The launcher resolves the maximum declared
+`launcher_version` from the signed current manifest and every verified
+signed-history manifest that contains the matching platform launcher. A sparse
+plugin-only current release can therefore still discover and install a newer
+launcher, and history order or zero-padded body versions cannot move the
+launcher backwards. On Windows, a launcher started with the long GitHub asset
+filename installs and relaunches the signed canonical `BMS-IR Arena Test.exe`
+path without deleting the distributed-name copy. Older manifests without
+`launcher_version` remain readable and simply do not advertise an independent
+launcher update. Network failure does not newly block a valid installed body. Once a
 signed mandatory update, revocation, or minimum-launcher requirement has been
 verified, the launcher caches that signed policy and keeps blocking the old
 version during later network failures. The Rust launch command enforces the
