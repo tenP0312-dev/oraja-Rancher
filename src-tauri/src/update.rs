@@ -1,7 +1,7 @@
 use crate::install::{set_executable_if_requested, CANONICAL_GAME_JAR};
 use crate::manifest::{
     verify_file, verify_history, verify_manifest, HistoryEntry, ReleaseAnnouncement,
-    ReleaseArtifact, ReleaseBootstrap, ReleaseManifest,
+    ReleaseArtifact, ReleaseBootstrap, ReleaseHistory, ReleaseManifest,
 };
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::Duration;
 use thiserror::Error;
 use url::Url;
@@ -270,13 +271,16 @@ fn append_url(base: &str, segments: &[&str]) -> Result<Url, UpdateError> {
     Ok(url)
 }
 
-fn agent() -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(5))
-        .timeout_read(Duration::from_secs(20))
-        .timeout_write(Duration::from_secs(20))
-        .redirects(3)
-        .build()
+fn agent() -> &'static ureq::Agent {
+    static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
+    AGENT.get_or_init(|| {
+        ureq::AgentBuilder::new()
+            .timeout_connect(Duration::from_secs(5))
+            .timeout_read(Duration::from_secs(20))
+            .timeout_write(Duration::from_secs(20))
+            .redirects(3)
+            .build()
+    })
 }
 
 fn fetch_response(url: &Url) -> Result<ureq::Response, UpdateError> {
@@ -339,12 +343,12 @@ fn fetch_release_from(
     Ok((input, release))
 }
 
-fn fetch_history_from(
+fn fetch_history_index_from(
     base_url: &str,
     public_key: &str,
     selected_channel: &str,
     selected_platform: &str,
-) -> Result<Vec<HistoryEntry>, UpdateError> {
+) -> Result<ReleaseHistory, UpdateError> {
     if selected_platform == "unsupported" {
         return Err(UpdateError::WrongTarget);
     }
@@ -359,8 +363,19 @@ fn fetch_history_from(
     )?;
     let bytes = fetch_bytes(&url, MAX_MANIFEST_BYTES)?;
     let input = String::from_utf8(bytes).map_err(|_| UpdateError::Incomplete)?;
-    let history = verify_history(&input, public_key, selected_channel, selected_platform)?;
-    Ok(history.versions)
+    verify_history(&input, public_key, selected_channel, selected_platform).map_err(Into::into)
+}
+
+fn fetch_history_from(
+    base_url: &str,
+    public_key: &str,
+    selected_channel: &str,
+    selected_platform: &str,
+) -> Result<Vec<HistoryEntry>, UpdateError> {
+    Ok(
+        fetch_history_index_from(base_url, public_key, selected_channel, selected_platform)?
+            .versions,
+    )
 }
 
 /// Lists every version in the signed history index other than
@@ -687,13 +702,42 @@ fn latest_launcher_release_from(
     current_json: &str,
     current: &ReleaseManifest,
 ) -> Result<Option<(String, ReleaseManifest)>, UpdateError> {
+    let history =
+        fetch_history_index_from(base_url, public_key, selected_channel, selected_platform)?;
+    if let Some(reference) = history.latest_launcher {
+        let candidate = if reference.release_version == current.version {
+            (current_json.to_string(), current.clone())
+        } else {
+            fetch_versioned_release_from(
+                base_url,
+                public_key,
+                selected_channel,
+                selected_platform,
+                &reference.release_version,
+            )?
+        };
+        if candidate.1.launcher_version != reference.launcher_version
+            || !release_contains_launcher(&candidate.1)
+            || (!current.launcher_version.trim().is_empty()
+                && compare_versions(
+                    current.launcher_version.trim(),
+                    reference.launcher_version.trim(),
+                ) == Ordering::Greater)
+        {
+            return Err(UpdateError::Manifest(
+                crate::manifest::ManifestError::Schema,
+            ));
+        }
+        return Ok(Some(candidate));
+    }
+
     let mut latest =
         if !current.launcher_version.trim().is_empty() && release_contains_launcher(current) {
             Some((current_json.to_string(), current.clone()))
         } else {
             None
         };
-    for entry in fetch_history_from(base_url, public_key, selected_channel, selected_platform)? {
+    for entry in history.versions {
         if entry.version == current.version {
             continue;
         }
@@ -2517,6 +2561,27 @@ mod tests {
         serde_json::to_vec(&history).unwrap()
     }
 
+    fn signed_history_with_latest_launcher_bytes(
+        signing: &SigningKey,
+        channel: &str,
+        platform: &str,
+        versions: &[(&str, &str)],
+        release_version: &str,
+        launcher_version: &str,
+    ) -> Vec<u8> {
+        let mut history: Value =
+            serde_json::from_slice(&signed_history_bytes(signing, channel, platform, versions))
+                .unwrap();
+        history.as_object_mut().unwrap().remove("signature");
+        history["latest_launcher"] = json!({
+            "release_version": release_version,
+            "launcher_version": launcher_version,
+        });
+        let signature = signing.sign(&serde_jcs::to_vec(&history).unwrap());
+        history["signature"] = Value::String(STANDARD.encode(signature.to_bytes()));
+        serde_json::to_vec(&history).unwrap()
+    }
+
     fn signed_downgrade_manifest_bytes(
         signing: &SigningKey,
         channel: &str,
@@ -2742,6 +2807,73 @@ mod tests {
                 .iter()
                 .any(|artifact| artifact.path == "BMS-IR Arena Test.exe"));
         }
+    }
+
+    #[test]
+    fn signed_latest_launcher_pointer_fetches_only_the_selected_manifest() {
+        let signing = SigningKey::from_bytes(&[56_u8; 32]);
+        let history = signed_history_with_latest_launcher_bytes(
+            &signing,
+            "test",
+            "windows-x64",
+            &[
+                ("0.4.14.46", "2026-08-15T00:00:00Z"),
+                ("0.4.14.44", "2026-08-14T00:00:00Z"),
+                ("0.4.14.43", "2026-08-13T00:00:00Z"),
+            ],
+            "0.4.14.44",
+            "0.2.25",
+        );
+        let launcher = signed_launcher_manifest_bytes(&signing, "0.4.14.44", "0.2.25");
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = serve_sequential_responses(
+            listener,
+            vec![
+                ("/channels/test/windows-x64/history.json", history),
+                (
+                    "/channels/test/windows-x64/manifests/0.4.14.44.json",
+                    launcher,
+                ),
+            ],
+        );
+        let current = ReleaseManifest {
+            schema_version: 1,
+            channel: "test".into(),
+            platform: "windows-x64".into(),
+            version: "0.4.14.46".into(),
+            published_at: "2026-08-15T00:00:00Z".into(),
+            release_notes_markdown: String::new(),
+            release_notes_markdown_ja: String::new(),
+            release_notes_markdown_en: String::new(),
+            announcements: vec![],
+            mandatory: false,
+            minimum_launcher_version: "0.2.20".into(),
+            launcher_version: String::new(),
+            revoked_versions: vec![],
+            bootstrap: None,
+            artifacts: vec![ReleaseArtifact {
+                path: CANONICAL_GAME_JAR.into(),
+                sha256: "00".repeat(32),
+                size: 1,
+                executable: false,
+            }],
+            signature: String::new(),
+        };
+        let latest = latest_launcher_release_from(
+            &format!("http://{address}"),
+            &STANDARD.encode(signing.verifying_key().to_bytes()),
+            "test",
+            "windows-x64",
+            "current",
+            &current,
+        )
+        .unwrap()
+        .unwrap()
+        .1;
+        server.join().unwrap();
+        assert_eq!(latest.version, "0.4.14.44");
+        assert_eq!(latest.launcher_version, "0.2.25");
     }
 
     #[cfg(unix)]

@@ -76,11 +76,19 @@ pub struct HistoryEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LatestLauncherReference {
+    pub release_version: String,
+    pub launcher_version: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ReleaseHistory {
     pub schema_version: u32,
     pub channel: String,
     pub platform: String,
     pub versions: Vec<HistoryEntry>,
+    #[serde(default)]
+    pub latest_launcher: Option<LatestLauncherReference>,
     pub signature: String,
 }
 
@@ -256,6 +264,14 @@ pub fn verify_history(
             return Err(ManifestError::Schema);
         }
         if !seen.insert(entry.version.to_ascii_lowercase()) {
+            return Err(ManifestError::Schema);
+        }
+    }
+    if let Some(latest) = &history.latest_launcher {
+        if !valid_version(&latest.release_version)
+            || !valid_version(&latest.launcher_version)
+            || !seen.contains(&latest.release_version.to_ascii_lowercase())
+        {
             return Err(ManifestError::Schema);
         }
     }
@@ -616,11 +632,55 @@ mod tests {
         let history = verify_history(&input, &key, "test", "windows-x64").unwrap();
         assert_eq!(history.versions.len(), 2);
         assert_eq!(history.versions[0].version, "0.4.15");
+        assert!(history.latest_launcher.is_none());
 
         let tampered = input.replace("0.4.14", "9.9.9");
         assert!(matches!(
             verify_history(&tampered, &key, "test", "windows-x64"),
             Err(ManifestError::Signature)
+        ));
+    }
+
+    #[test]
+    fn verifies_signed_latest_launcher_reference() {
+        let signing = SigningKey::from_bytes(&[8_u8; 32]);
+        let mut value = json!({
+            "schema_version": 1,
+            "channel": "test",
+            "platform": "windows-x64",
+            "versions": [
+                {"version": "0.4.14.44", "published_at": "2026-08-14T00:00:00Z"},
+                {"version": "0.4.14.43", "published_at": "2026-08-13T00:00:00Z"}
+            ],
+            "latest_launcher": {
+                "release_version": "0.4.14.44",
+                "launcher_version": "0.2.25"
+            }
+        });
+        let signature = signing.sign(&serde_jcs::to_vec(&value).unwrap());
+        value["signature"] = Value::String(STANDARD.encode(signature.to_bytes()));
+        let key = STANDARD.encode(signing.verifying_key().to_bytes());
+        let history = verify_history(
+            &serde_json::to_string(&value).unwrap(),
+            &key,
+            "test",
+            "windows-x64",
+        )
+        .unwrap();
+        assert_eq!(history.latest_launcher.unwrap().launcher_version, "0.2.25");
+
+        value.as_object_mut().unwrap().remove("signature");
+        value["latest_launcher"]["release_version"] = Value::String("0.4.14.99".into());
+        let signature = signing.sign(&serde_jcs::to_vec(&value).unwrap());
+        value["signature"] = Value::String(STANDARD.encode(signature.to_bytes()));
+        assert!(matches!(
+            verify_history(
+                &serde_json::to_string(&value).unwrap(),
+                &key,
+                "test",
+                "windows-x64"
+            ),
+            Err(ManifestError::Schema)
         ));
     }
 

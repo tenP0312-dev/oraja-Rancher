@@ -37,11 +37,14 @@ Unconfigured development builds fall back to the executable name: `BMS-IR
 Arena.exe` reads `stable`; `BMS-IR Arena Test.exe` reads `test`, so separate
 folders can coexist. The equivalent macOS app bundle names select the same
 fallback channels. The launcher resolves the maximum declared
-`launcher_version` from the signed current manifest and every verified
-signed-history manifest that contains the matching platform launcher. A sparse
-plugin-only current release can therefore still discover and install a newer
-launcher, and history order or zero-padded body versions cannot move the
-launcher backwards. On Windows, a launcher started with the long GitHub asset
+`launcher_version` from the signed history's optional `latest_launcher`
+pointer and verifies that one selected manifest. Legacy signed history without
+the pointer retains the complete manifest scan. A sparse plugin-only current
+release can therefore still discover and install a newer launcher, while
+current channels avoid a request per historical release. History order or
+zero-padded body versions cannot move the launcher backwards. One shared HTTP
+agent also reuses connections across manifest and artifact requests. On
+Windows, a launcher started with the long GitHub asset
 filename installs and relaunches the signed canonical `BMS-IR Arena Test.exe`
 path without deleting the distributed-name copy. Older manifests without
 `launcher_version` remain readable and simply do not advertise an independent
