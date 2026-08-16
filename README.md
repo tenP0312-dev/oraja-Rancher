@@ -39,7 +39,16 @@ folders can coexist. The equivalent macOS app bundle names select the same
 fallback channels. The launcher resolves the maximum declared
 `launcher_version` from the signed history's optional `latest_launcher`
 pointer and verifies that one selected manifest. Legacy signed history without
-the pointer retains the complete manifest scan. A sparse plugin-only current
+the pointer retains the complete manifest scan. Launcher 0.2.26 also consumes
+the history's optional signed `artifact_locations` reference. The referenced
+per-platform index is verified with the same compiled Ed25519 key and binds
+each version/path/hash/size tuple to an HTTPS GitHub Release asset URL. An
+indexed URL is accepted only when it matches the already verified release
+manifest; malformed, duplicated, wrongly targeted, or mismatched metadata
+fails closed. Legacy history without the reference, and artifacts absent from
+a valid index, keep the existing Pages-relative download path. This permits a
+launcher-first migration without breaking the current signed channel layout.
+A sparse plugin-only current
 release can therefore still discover and install a newer launcher, while
 current channels avoid a request per historical release. History order or
 zero-padded body versions cannot move the launcher backwards. One shared HTTP

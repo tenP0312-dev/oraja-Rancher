@@ -14,6 +14,8 @@ const MAX_RELEASE_NOTES_BYTES: usize = 64 * 1024;
 const MAX_ANNOUNCEMENTS: usize = 20;
 const MAX_ANNOUNCEMENT_TITLE: usize = 200;
 const MAX_BOOTSTRAP_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const MAX_ARTIFACT_LOCATIONS: usize = 10_000;
+pub const ARTIFACT_LOCATIONS_NAME: &str = "artifact-locations.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ReleaseArtifact {
@@ -82,6 +84,11 @@ pub struct LatestLauncherReference {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ArtifactLocationsReference {
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ReleaseHistory {
     pub schema_version: u32,
     pub channel: String,
@@ -89,6 +96,27 @@ pub struct ReleaseHistory {
     pub versions: Vec<HistoryEntry>,
     #[serde(default)]
     pub latest_launcher: Option<LatestLauncherReference>,
+    #[serde(default)]
+    pub artifact_locations: Option<ArtifactLocationsReference>,
+    pub signature: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ArtifactLocation {
+    pub version: String,
+    pub path: String,
+    pub sha256: String,
+    pub size: u64,
+    pub url: String,
+    pub retain_on_pages: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ArtifactLocations {
+    pub schema_version: u32,
+    pub channel: String,
+    pub platform: String,
+    pub locations: Vec<ArtifactLocation>,
     pub signature: String,
 }
 
@@ -116,6 +144,10 @@ pub enum ManifestError {
     HistoryTarget,
     #[error("history does not list the requested version")]
     HistoryVersionMissing,
+    #[error("artifact-location channel or platform does not match the request")]
+    ArtifactLocationTarget,
+    #[error("artifact location does not match the signed manifest: {0}/{1}")]
+    ArtifactLocationMismatch(String, String),
     #[error("I/O error: {0}")]
     Io(#[from] io::Error),
 }
@@ -275,8 +307,118 @@ pub fn verify_history(
             return Err(ManifestError::Schema);
         }
     }
+    if history
+        .artifact_locations
+        .as_ref()
+        .is_some_and(|reference| reference.path != ARTIFACT_LOCATIONS_NAME)
+    {
+        return Err(ManifestError::Schema);
+    }
     verify_canonical_signature(input, public_key_base64, &history.signature)?;
     Ok(history)
+}
+
+fn valid_github_release_url(value: &str) -> bool {
+    let Ok(url) = Url::parse(value) else {
+        return false;
+    };
+    if url.scheme() != "https"
+        || url.host_str() != Some("github.com")
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || !matches!(url.port(), None | Some(443))
+    {
+        return false;
+    }
+    let Some(segments) = url.path_segments() else {
+        return false;
+    };
+    let segments = segments.collect::<Vec<_>>();
+    if segments.len() != 6
+        || segments[2] != "releases"
+        || segments[3] != "download"
+        || segments.iter().any(|segment| {
+            segment.is_empty() || {
+                let folded = segment.to_ascii_lowercase();
+                folded.contains("%2f") || folded.contains("%5c")
+            }
+        })
+    {
+        return false;
+    }
+    segments[0]
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'))
+        && segments[1]
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'))
+}
+
+pub fn verify_artifact_locations(
+    input: &str,
+    public_key_base64: &str,
+    expected_channel: &str,
+    expected_platform: &str,
+) -> Result<ArtifactLocations, ManifestError> {
+    let locations: ArtifactLocations = serde_json::from_str(input)?;
+    if locations.schema_version != 1
+        || !matches!(locations.channel.as_str(), "stable" | "test")
+        || !matches!(locations.platform.as_str(), "windows-x64" | "macos-arm64")
+        || locations.locations.len() > MAX_ARTIFACT_LOCATIONS
+    {
+        return Err(ManifestError::Schema);
+    }
+    if locations.channel != expected_channel || locations.platform != expected_platform {
+        return Err(ManifestError::ArtifactLocationTarget);
+    }
+    let mut seen = std::collections::HashSet::with_capacity(locations.locations.len());
+    for location in &locations.locations {
+        let artifact = ReleaseArtifact {
+            path: location.path.clone(),
+            sha256: location.sha256.clone(),
+            size: location.size,
+            executable: false,
+        };
+        if !valid_version(&location.version)
+            || !valid_github_release_url(&location.url)
+            || !seen.insert((
+                location.version.to_ascii_lowercase(),
+                location.path.to_ascii_lowercase(),
+            ))
+        {
+            return Err(ManifestError::Schema);
+        }
+        validate_artifacts(&[artifact])?;
+    }
+    verify_canonical_signature(input, public_key_base64, &locations.signature)?;
+    Ok(locations)
+}
+
+impl ArtifactLocations {
+    pub fn url_for(
+        &self,
+        version: &str,
+        artifact: &ReleaseArtifact,
+    ) -> Result<Option<Url>, ManifestError> {
+        let Some(location) = self.locations.iter().find(|location| {
+            location.version.eq_ignore_ascii_case(version)
+                && location.path.eq_ignore_ascii_case(&artifact.path)
+        }) else {
+            return Ok(None);
+        };
+        if !location.sha256.eq_ignore_ascii_case(&artifact.sha256) || location.size != artifact.size
+        {
+            return Err(ManifestError::ArtifactLocationMismatch(
+                version.to_string(),
+                artifact.path.clone(),
+            ));
+        }
+        Url::parse(&location.url)
+            .map(Some)
+            .map_err(|_| ManifestError::Schema)
+    }
 }
 
 fn valid_announcement_date(value: &str) -> bool {
@@ -655,6 +797,9 @@ mod tests {
             "latest_launcher": {
                 "release_version": "0.4.14.44",
                 "launcher_version": "0.2.25"
+            },
+            "artifact_locations": {
+                "path": "artifact-locations.json"
             }
         });
         let signature = signing.sign(&serde_jcs::to_vec(&value).unwrap());
@@ -668,6 +813,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(history.latest_launcher.unwrap().launcher_version, "0.2.25");
+        assert_eq!(
+            history.artifact_locations.unwrap().path,
+            ARTIFACT_LOCATIONS_NAME
+        );
 
         value.as_object_mut().unwrap().remove("signature");
         value["latest_launcher"]["release_version"] = Value::String("0.4.14.99".into());
@@ -713,5 +862,75 @@ mod tests {
             verify_history(&input, &key, "test", "windows-x64"),
             Err(ManifestError::Schema)
         ));
+    }
+
+    #[test]
+    fn verifies_signed_artifact_locations_and_rejects_mismatch() {
+        let signing = SigningKey::from_bytes(&[31_u8; 32]);
+        let mut value = json!({
+            "schema_version": 1,
+            "channel": "test",
+            "platform": "windows-x64",
+            "locations": [{
+                "version": "0.4.14.49",
+                "path": "Arena-oraja.jar",
+                "sha256": "12".repeat(32),
+                "size": 123,
+                "url": "https://github.com/tenP0312-dev/bms-ir-arena-patch-server/releases/download/test-0.4.14.49/windows-x64-Arena-oraja.jar",
+                "retain_on_pages": false
+            }]
+        });
+        let signature = signing.sign(&serde_jcs::to_vec(&value).unwrap());
+        value["signature"] = Value::String(STANDARD.encode(signature.to_bytes()));
+        let input = serde_json::to_string(&value).unwrap();
+        let locations = verify_artifact_locations(
+            &input,
+            &STANDARD.encode(signing.verifying_key().to_bytes()),
+            "test",
+            "windows-x64",
+        )
+        .unwrap();
+        let artifact = ReleaseArtifact {
+            path: "Arena-oraja.jar".into(),
+            sha256: "12".repeat(32),
+            size: 123,
+            executable: false,
+        };
+        assert_eq!(
+            locations
+                .url_for("0.4.14.49", &artifact)
+                .unwrap()
+                .unwrap()
+                .host_str(),
+            Some("github.com")
+        );
+
+        let mismatched = ReleaseArtifact {
+            size: 124,
+            ..artifact
+        };
+        assert!(matches!(
+            locations.url_for("0.4.14.49", &mismatched),
+            Err(ManifestError::ArtifactLocationMismatch(_, _))
+        ));
+
+        value["locations"][0]["url"] = Value::String("https://example.test/not-a-release".into());
+        assert!(matches!(
+            verify_artifact_locations(
+                &serde_json::to_string(&value).unwrap(),
+                &STANDARD.encode(signing.verifying_key().to_bytes()),
+                "test",
+                "windows-x64",
+            ),
+            Err(ManifestError::Schema)
+        ));
+    }
+
+    #[test]
+    fn verifies_python_generated_artifact_locations() {
+        let input = r###"{"channel":"test","locations":[{"path":"Arena-oraja.jar","retain_on_pages":false,"sha256":"1212121212121212121212121212121212121212121212121212121212121212","size":123,"url":"https://github.com/tenP0312-dev/bms-ir-arena-patch-server/releases/download/test-0.4.14.49/windows-x64-Arena-oraja.jar","version":"0.4.14.49"}],"platform":"windows-x64","schema_version":1,"signature":"h9A08Cv/Xi4nNoktHo0QQGvEAf7uGUY4LgaLhn+ZjmRPrBMjQTk4QGCgJ+Qbt4npY4u5L0pjJ4H6GyrEzsmvDg=="}"###;
+        let key = "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=";
+        let locations = verify_artifact_locations(input, key, "test", "windows-x64").unwrap();
+        assert_eq!(locations.locations[0].version, "0.4.14.49");
     }
 }
