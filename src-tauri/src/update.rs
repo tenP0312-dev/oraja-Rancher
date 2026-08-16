@@ -1,7 +1,8 @@
 use crate::install::{set_executable_if_requested, CANONICAL_GAME_JAR};
 use crate::manifest::{
-    verify_file, verify_history, verify_manifest, HistoryEntry, ReleaseAnnouncement,
-    ReleaseArtifact, ReleaseBootstrap, ReleaseHistory, ReleaseManifest,
+    verify_artifact_locations, verify_file, verify_history, verify_manifest, ArtifactLocations,
+    HistoryEntry, ReleaseAnnouncement, ReleaseArtifact, ReleaseBootstrap, ReleaseHistory,
+    ReleaseManifest,
 };
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -378,6 +379,58 @@ fn fetch_history_from(
     )
 }
 
+fn fetch_artifact_locations_from(
+    base_url: &str,
+    public_key: &str,
+    selected_channel: &str,
+    selected_platform: &str,
+    history: &ReleaseHistory,
+) -> Result<Option<ArtifactLocations>, UpdateError> {
+    let Some(reference) = &history.artifact_locations else {
+        return Ok(None);
+    };
+    let url = append_url(
+        base_url,
+        &[
+            "channels",
+            selected_channel,
+            selected_platform,
+            &reference.path,
+        ],
+    )?;
+    let bytes = fetch_bytes(&url, MAX_MANIFEST_BYTES)?;
+    let input = String::from_utf8(bytes).map_err(|_| UpdateError::Incomplete)?;
+    verify_artifact_locations(&input, public_key, selected_channel, selected_platform)
+        .map(Some)
+        .map_err(Into::into)
+}
+
+fn artifact_download_url(
+    base_url: &str,
+    selected_channel: &str,
+    selected_platform: &str,
+    version: &str,
+    artifact: &ReleaseArtifact,
+    locations: Option<&ArtifactLocations>,
+) -> Result<Url, UpdateError> {
+    if let Some(url) = locations
+        .map(|index| index.url_for(version, artifact))
+        .transpose()?
+        .flatten()
+    {
+        return Ok(url);
+    }
+    let mut segments = vec![
+        "channels",
+        selected_channel,
+        selected_platform,
+        "releases",
+        version,
+    ];
+    segments.extend(artifact.path.split('/'));
+    append_url(base_url, &segments)
+}
+
 /// Lists every version in the signed history index other than
 /// `current_version` and the channel's current published version, for
 /// presentation as a selectable "deprecated" release the operator can
@@ -694,6 +747,7 @@ fn latest_plugin_release_from(
 /// Resolves launcher updates independently from the sparse current release.
 /// History order and body-version spelling are not launcher-version order, so
 /// every signed launcher-bearing candidate is compared by `launcher_version`.
+#[cfg(test)]
 fn latest_launcher_release_from(
     base_url: &str,
     public_key: &str,
@@ -704,7 +758,50 @@ fn latest_launcher_release_from(
 ) -> Result<Option<(String, ReleaseManifest)>, UpdateError> {
     let history =
         fetch_history_index_from(base_url, public_key, selected_channel, selected_platform)?;
-    if let Some(reference) = history.latest_launcher {
+    latest_launcher_release_from_history(
+        base_url,
+        public_key,
+        selected_channel,
+        selected_platform,
+        current_json,
+        current,
+        &history,
+    )
+}
+
+fn latest_launcher_and_history_from(
+    base_url: &str,
+    public_key: &str,
+    selected_channel: &str,
+    selected_platform: &str,
+    current_json: &str,
+    current: &ReleaseManifest,
+) -> Result<(Option<(String, ReleaseManifest)>, ReleaseHistory), UpdateError> {
+    let history =
+        fetch_history_index_from(base_url, public_key, selected_channel, selected_platform)?;
+    let launcher = latest_launcher_release_from_history(
+        base_url,
+        public_key,
+        selected_channel,
+        selected_platform,
+        current_json,
+        current,
+        &history,
+    )?;
+    Ok((launcher, history))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn latest_launcher_release_from_history(
+    base_url: &str,
+    public_key: &str,
+    selected_channel: &str,
+    selected_platform: &str,
+    current_json: &str,
+    current: &ReleaseManifest,
+    history: &ReleaseHistory,
+) -> Result<Option<(String, ReleaseManifest)>, UpdateError> {
+    if let Some(reference) = &history.latest_launcher {
         let candidate = if reference.release_version == current.version {
             (current_json.to_string(), current.clone())
         } else {
@@ -737,7 +834,7 @@ fn latest_launcher_release_from(
         } else {
             None
         };
-    for entry in history.versions {
+    for entry in &history.versions {
         if entry.version == current.version {
             continue;
         }
@@ -882,8 +979,13 @@ fn install_plugin_version_from<F>(
 where
     F: FnMut(UpdateProgress),
 {
-    let history = fetch_history_from(base_url, public_key, selected_channel, selected_platform)?;
-    if !history.iter().any(|entry| entry.version == version) {
+    let history =
+        fetch_history_index_from(base_url, public_key, selected_channel, selected_platform)?;
+    if !history
+        .versions
+        .iter()
+        .any(|entry| entry.version == version)
+    {
         return Err(UpdateError::Manifest(
             crate::manifest::ManifestError::HistoryVersionMissing,
         ));
@@ -908,15 +1010,21 @@ where
     let staging = root.join(STAGING_DIRECTORY);
     let staged_path = staging.join(&artifact.path);
     fs::create_dir_all(staged_path.parent().ok_or(UpdateError::UnsafeStaging)?)?;
-    let mut url_segments = vec![
-        "channels",
+    let locations = fetch_artifact_locations_from(
+        base_url,
+        public_key,
         selected_channel,
         selected_platform,
-        "releases",
+        &history,
+    )?;
+    let url = artifact_download_url(
+        base_url,
+        selected_channel,
+        selected_platform,
         version,
-    ];
-    url_segments.extend(artifact.path.split('/'));
-    let url = append_url(base_url, &url_segments)?;
+        &artifact,
+        locations.as_ref(),
+    )?;
     let mut done = 0;
     download_to_path(
         &url,
@@ -988,8 +1096,13 @@ fn downgrade_to_version_from<F>(
 where
     F: FnMut(UpdateProgress),
 {
-    let history = fetch_history_from(base_url, public_key, selected_channel, selected_platform)?;
-    if !history.iter().any(|entry| entry.version == target_version) {
+    let history =
+        fetch_history_index_from(base_url, public_key, selected_channel, selected_platform)?;
+    if !history
+        .versions
+        .iter()
+        .any(|entry| entry.version == target_version)
+    {
         return Err(UpdateError::Manifest(
             crate::manifest::ManifestError::HistoryVersionMissing,
         ));
@@ -1021,16 +1134,20 @@ where
     let staging_directory = root.join(STAGING_DIRECTORY);
     fs::create_dir_all(&staging_directory)?;
     let staging_path = staging_directory.join("downgrade.jar");
-    let artifact_url = append_url(
+    let locations = fetch_artifact_locations_from(
         base_url,
-        &[
-            "channels",
-            selected_channel,
-            selected_platform,
-            "releases",
-            target_version,
-            &jar_artifact.path,
-        ],
+        public_key,
+        selected_channel,
+        selected_platform,
+        &history,
+    )?;
+    let artifact_url = artifact_download_url(
+        base_url,
+        selected_channel,
+        selected_platform,
+        target_version,
+        &jar_artifact,
+        locations.as_ref(),
     )?;
     let mut bytes_done = 0_u64;
     download_to_path(
@@ -1359,7 +1476,7 @@ pub fn check_installation(
     let public_key = release_public_key()?;
     let (input, release) =
         fetch_release_from(base_url, public_key, &selected_channel, selected_platform)?;
-    let launcher_release = latest_launcher_release_from(
+    let (launcher_release, _history) = latest_launcher_and_history_from(
         base_url,
         public_key,
         &selected_channel,
@@ -1627,7 +1744,7 @@ where
     let root = root.canonicalize()?;
     let (manifest_json, release) =
         fetch_release_from(base_url, public_key, selected_channel, selected_platform)?;
-    let latest_launcher = latest_launcher_release_from(
+    let (latest_launcher, history) = latest_launcher_and_history_from(
         base_url,
         public_key,
         selected_channel,
@@ -1746,6 +1863,17 @@ where
             })
             .collect::<Vec<_>>()
     };
+    let artifact_locations = if download_artifacts.is_empty() {
+        None
+    } else {
+        fetch_artifact_locations_from(
+            base_url,
+            public_key,
+            selected_channel,
+            selected_platform,
+            &history,
+        )?
+    };
     let bytes_total = bootstrap.map_or(0, |value| value.size).saturating_add(
         download_artifacts
             .iter()
@@ -1802,16 +1930,14 @@ where
         if let Some(parent) = destination.parent() {
             fs::create_dir_all(parent)?;
         }
-        let segments: Vec<&str> = artifact.path.split('/').collect();
-        let mut url_segments = vec![
-            "channels",
+        let url = artifact_download_url(
+            base_url,
             selected_release.channel.as_str(),
             selected_release.platform.as_str(),
-            "releases",
             source_version.as_str(),
-        ];
-        url_segments.extend(segments);
-        let url = append_url(base_url, &url_segments)?;
+            artifact,
+            artifact_locations.as_ref(),
+        )?;
         download_to_path(
             &url,
             &destination,
@@ -2536,6 +2662,73 @@ mod tests {
             url.as_str(),
             "https://example.test/arena-patches/channels/test/windows-x64/BMS-IR%20Arena.exe"
         );
+    }
+
+    #[test]
+    fn signed_external_location_overrides_pages_and_mismatch_fails_closed() {
+        let artifact = ReleaseArtifact {
+            path: "Arena-oraja.jar".into(),
+            sha256: "12".repeat(32),
+            size: 123,
+            executable: false,
+        };
+        let locations = ArtifactLocations {
+            schema_version: 1,
+            channel: "test".into(),
+            platform: "windows-x64".into(),
+            locations: vec![crate::manifest::ArtifactLocation {
+                version: "0.4.14.49".into(),
+                path: artifact.path.clone(),
+                sha256: artifact.sha256.clone(),
+                size: artifact.size,
+                url: "https://github.com/tenP0312-dev/bms-ir-arena-patch-server/releases/download/test-0.4.14.49/windows-x64-Arena-oraja.jar".into(),
+                retain_on_pages: false,
+            }],
+            signature: String::new(),
+        };
+        let external = artifact_download_url(
+            "https://example.test/patches",
+            "test",
+            "windows-x64",
+            "0.4.14.49",
+            &artifact,
+            Some(&locations),
+        )
+        .unwrap();
+        assert_eq!(external.host_str(), Some("github.com"));
+        assert!(external.path().ends_with("/windows-x64-Arena-oraja.jar"));
+
+        let legacy = artifact_download_url(
+            "https://example.test/patches",
+            "test",
+            "windows-x64",
+            "0.4.14.49",
+            &artifact,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            legacy.as_str(),
+            "https://example.test/patches/channels/test/windows-x64/releases/0.4.14.49/Arena-oraja.jar"
+        );
+
+        let mismatched = ReleaseArtifact {
+            size: 124,
+            ..artifact
+        };
+        assert!(matches!(
+            artifact_download_url(
+                "https://example.test/patches",
+                "test",
+                "windows-x64",
+                "0.4.14.49",
+                &mismatched,
+                Some(&locations),
+            ),
+            Err(UpdateError::Manifest(
+                crate::manifest::ManifestError::ArtifactLocationMismatch(_, _)
+            ))
+        ));
     }
 
     fn signed_history_bytes(
