@@ -6,13 +6,17 @@ There is no installer, MSI, registry write, administrator requirement, Start
 Menu registration, or folder picker. Existing BAT and command launch remain
 valid.
 
-When the installation is current, the first action row exposes the four
-normal actions in the order users need them:
+The launcher home is organized around the three choices needed before normal
+play: launch or update Arena, open the existing full configuration with `-c`,
+or review BMS-IR-specific settings. Launch is the dominant action. Signed
+release notes, update checks, component versions, announcements, and advanced
+version/plugin management remain available without competing with that path.
 
-- view the signed release notes
-- open the existing pre-launch configuration with `-c`
-- check for updates
-- launch Arena
+The current BMS-IR, jukebox, skin, and difficulty-table quick settings are an
+explicit UI review mock. They accept temporary in-window choices only and do
+not write `config.json`, save credentials, change game configuration, or call
+a BMS-IR API. The existing full configuration remains the only functional
+game-settings path in this phase.
 
 The update check and advanced version/plugin controls remain available below.
 When an update exists, the body and launcher cards show their installed and

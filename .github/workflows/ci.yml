@@ -30,6 +30,10 @@ jobs:
         working-directory: src-tauri
         run: cargo test --locked
 
+      - name: Test launcher home mock
+        if: github.event_name == 'pull_request'
+        run: node --test web/quick-tools-mock.test.mjs
+
       - name: Build portable launcher binary
         if: github.event_name == 'pull_request'
         working-directory: src-tauri

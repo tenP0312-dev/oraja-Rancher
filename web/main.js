@@ -1,3 +1,5 @@
+import {getQuickToolDefinition} from "./quick-tools-mock.mjs";
+
 const invoke = window.__TAURI__?.core?.invoke;
 const listen = window.__TAURI__?.event?.listen;
 
@@ -13,7 +15,7 @@ const dictionary = {
     notInstalled: "本体はまだインストールされていません",
     ready: "本体、Java、Arenaプラグインを確認しました",
     play: "Arenaを起動",
-    configure: "起動前コンフィグ",
+    configure: "本体設定",
     check: "更新を確認",
     updateAll: "すべて更新",
     updateBody: "本体を更新",
@@ -31,7 +33,7 @@ const dictionary = {
     updating: "更新ファイルを検証して適用しています",
     installing: "本体ファイルを検証してセットアップしています",
     details: "詳細",
-    information: "お知らせ",
+    information: "アップデート・イベント情報",
     noInformation: "現在のお知らせはありません",
     policyInvalid: "保存された更新判定を検証できません。オンライン更新確認が必要です",
     updateUnconfigured: "このランチャーには更新先が設定されていません",
@@ -82,7 +84,34 @@ const dictionary = {
     pluginInstall: "このプラグインを適用",
     pluginDeprecated: "旧プラグイン版",
     pluginReleaseVersion: "プラグイン {plugin} / 本体リリース {release}",
-    subtitle: "アップデートと起動",
+    subtitle: "プレイ・更新・管理",
+    close: "閉じる",
+    accountMenu: "アカウント",
+    launchEyebrow: "PLAY / UPDATE",
+    launchTitle: "Arenaをはじめる",
+    primaryActionsLabel: "主な操作",
+    playHint: "準備済みの本体ですぐにプレイ",
+    updateAllHint: "必要なコンポーネントをまとめて更新",
+    configureHint: "詳細なゲームコンフィグを開く",
+    bmsirSettings: "BMS-IR設定",
+    bmsirSettingsHint: "アカウントとIR固有設定",
+    quickToolsEyebrow: "QUICK SETTINGS",
+    quickToolsTitle: "よく使う設定",
+    jukeboxTitle: "ジュークボックス",
+    jukeboxHint: "選曲セットを切り替える",
+    skinTitle: "スキン",
+    skinHint: "使用スキンを選ぶ",
+    tablesTitle: "難易度表",
+    tablesHint: "テーブルを追加・整理する",
+    mockFootnote: "この段階では画面構成だけのモックです。config.jsonへの書き込みや設定保存は行いません。",
+    informationEyebrow: "EVENT LOG",
+    systemEyebrow: "SYSTEM",
+    systemTitle: "バージョン状態",
+    latestRelease: "最新リリース",
+    advancedEyebrow: "ADVANCED",
+    advancedTitle: "詳細管理",
+    quickToolMockNotice: "操作感を確認するためのモックです。入力内容は送信・保存されず、config.jsonも変更しません。",
+    mockDone: "閉じる",
     residentOn: "常駐 ON",
     residentOff: "常駐 OFF",
     settingsOpen: "設定",
@@ -108,7 +137,7 @@ const dictionary = {
     notInstalled: "The game is not installed yet",
     ready: "Game, Java, and Arena plugin are ready",
     play: "Launch Arena",
-    configure: "Pre-launch configuration",
+    configure: "Game settings",
     check: "Check for updates",
     updateAll: "Update all",
     updateBody: "Update game",
@@ -126,7 +155,7 @@ const dictionary = {
     updating: "Verifying and applying the update",
     installing: "Verifying and installing the game files",
     details: "Details",
-    information: "Information",
+    information: "Updates and event information",
     noInformation: "There are no current announcements",
     policyInvalid: "The saved update policy is invalid. An online update check is required",
     updateUnconfigured: "This launcher has no update endpoint configured",
@@ -177,7 +206,34 @@ const dictionary = {
     pluginInstall: "Apply this plugin",
     pluginDeprecated: "Older plugin release",
     pluginReleaseVersion: "Plugin {plugin} / body release {release}",
-    subtitle: "Updates and launch",
+    subtitle: "Play, update, and manage",
+    close: "Close",
+    accountMenu: "Account",
+    launchEyebrow: "PLAY / UPDATE",
+    launchTitle: "Start Arena",
+    primaryActionsLabel: "Primary actions",
+    playHint: "Launch the verified installed body",
+    updateAllHint: "Update every component that needs it",
+    configureHint: "Open the full game configuration",
+    bmsirSettings: "BMS-IR settings",
+    bmsirSettingsHint: "Account and IR-specific settings",
+    quickToolsEyebrow: "QUICK SETTINGS",
+    quickToolsTitle: "Frequently used settings",
+    jukeboxTitle: "Jukebox",
+    jukeboxHint: "Choose a song set",
+    skinTitle: "Skin",
+    skinHint: "Select the active skin",
+    tablesTitle: "Difficulty tables",
+    tablesHint: "Add and organize tables",
+    mockFootnote: "This phase is a layout mock only. It does not write config.json or save settings.",
+    informationEyebrow: "EVENT LOG",
+    systemEyebrow: "SYSTEM",
+    systemTitle: "Version status",
+    latestRelease: "Latest release",
+    advancedEyebrow: "ADVANCED",
+    advancedTitle: "Advanced management",
+    quickToolMockNotice: "This interaction mock does not send or save input and never changes config.json.",
+    mockDone: "Close",
     residentOn: "Resident ON",
     residentOff: "Resident OFF",
     settingsOpen: "Settings",
@@ -212,6 +268,7 @@ let pluginVersions = null;
 let pluginStatus = null;
 let pluginUnavailable = false;
 let launcherSettings = null;
+let activeQuickTool = null;
 const deprecatedNotesCache = {};
 const byId = id => document.getElementById(id);
 const tr = key => dictionary[language][key];
@@ -233,6 +290,7 @@ function applyLanguage() {
   renderDeprecated();
   renderPlugins();
   renderSettings();
+  renderQuickToolDialog();
 }
 
 function renderSettings() {
@@ -273,6 +331,63 @@ async function saveSetting(key, value) {
 
 function openDialog(dialog) {
   if (!dialog.open) dialog.showModal();
+}
+
+function renderQuickToolDialog() {
+  if (!activeQuickTool) return;
+  const definition = getQuickToolDefinition(language, activeQuickTool);
+  if (!definition || definition.persistent) return;
+  byId("quick-tool-dialog-title").textContent = definition.title;
+  byId("quick-tool-dialog-description").textContent = definition.description;
+  const fields = byId("quick-tool-fields");
+  fields.replaceChildren();
+  definition.fields.forEach((field, index) => {
+    const row = document.createElement("label");
+    if (field.type === "select") {
+      row.className = "mock-field";
+      const label = document.createElement("span");
+      label.textContent = field.label;
+      const help = document.createElement("small");
+      help.textContent = field.help;
+      const select = document.createElement("select");
+      select.setAttribute("aria-label", field.label);
+      field.options.forEach(option => {
+        const element = document.createElement("option");
+        element.textContent = option;
+        select.append(element);
+      });
+      row.append(label, help, select);
+    } else {
+      row.className = "mock-toggle";
+      const copy = document.createElement("span");
+      const label = document.createElement("span");
+      label.textContent = field.label;
+      const help = document.createElement("small");
+      help.textContent = field.help;
+      copy.append(label, help);
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.checked = Boolean(field.checked);
+      input.setAttribute("aria-label", field.label);
+      row.append(copy, input);
+    }
+    row.dataset.mockField = `${activeQuickTool}-${index}`;
+    fields.append(row);
+  });
+}
+
+function openQuickTool(kind) {
+  const definition = getQuickToolDefinition(language, kind);
+  if (!definition || definition.persistent) return;
+  activeQuickTool = kind;
+  renderQuickToolDialog();
+  openDialog(byId("quick-tool-dialog"));
+}
+
+function closeQuickTool() {
+  byId("quick-tool-dialog").close();
+  activeQuickTool = null;
+  byId("quick-tool-fields").replaceChildren();
 }
 
 function renderPlugins() {
@@ -713,12 +828,16 @@ function renderStatusCards() {
 function renderReleasePanel() {
   const current = !update?.body_update_available && !update?.launcher_update_available;
   byId("release-notes-open").disabled = !update;
-  if (!update) return;
+  if (!update) {
+    byId("latest-release-time").textContent = "—";
+    return;
+  }
   byId("release-dialog-title").textContent = current
     ? tr("currentRelease").replace("{version}", update.available_version)
     : tr(update.status === "install_required" ? "installAvailable" : "available")
       .replace("{version}", update.available_version);
   const publishedAt = formatPublishedAt(update.available_published_at);
+  byId("latest-release-time").textContent = publishedAt || "—";
   byId("available-published-at").textContent = publishedAt
     ? tr("publishedAt").replace("{datetime}", publishedAt)
     : "";
@@ -961,17 +1080,31 @@ byId("release-notes-open").addEventListener("click", () => openDialog(byId("rele
 byId("release-dialog-close").addEventListener("click", () => byId("release-dialog").close());
 byId("settings-open").addEventListener("click", () => openDialog(byId("settings-dialog")));
 byId("settings-close").addEventListener("click", () => byId("settings-dialog").close());
+byId("bmsir-account-open").addEventListener("click", () => openQuickTool("bmsir"));
+byId("bmsir-settings-open").addEventListener("click", () => openQuickTool("bmsir"));
+document.querySelectorAll("[data-quick-tool]").forEach(button => {
+  button.addEventListener("click", () => openQuickTool(button.dataset.quickTool));
+});
+byId("quick-tool-dialog-close").addEventListener("click", closeQuickTool);
+byId("quick-tool-dialog-done").addEventListener("click", closeQuickTool);
 byId("resident-state").addEventListener("click", () => saveSetting("resident", !launcherSettings?.resident));
 byId("setting-resident").addEventListener("change", event => saveSetting("resident", event.target.checked));
 byId("setting-background-check").addEventListener("change", event => saveSetting("background_check", event.target.checked));
 byId("setting-autostart").addEventListener("change", event => saveSetting("autostart", event.target.checked));
-[byId("release-dialog"), byId("settings-dialog")].forEach(dialog => {
+[byId("release-dialog"), byId("settings-dialog"), byId("quick-tool-dialog")].forEach(dialog => {
   dialog.addEventListener("click", event => {
     const bounds = dialog.getBoundingClientRect();
     const inside = event.clientX >= bounds.left && event.clientX <= bounds.right
       && event.clientY >= bounds.top && event.clientY <= bounds.bottom;
-    if (!inside) dialog.close();
+    if (!inside) {
+      if (dialog.id === "quick-tool-dialog") closeQuickTool();
+      else dialog.close();
+    }
   });
+});
+byId("quick-tool-dialog").addEventListener("close", () => {
+  activeQuickTool = null;
+  byId("quick-tool-fields").replaceChildren();
 });
 
 if (listen) {
