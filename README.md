@@ -93,6 +93,15 @@ the newest or an older plugin replaces only the single `ir/bms_ir*.jar`
 transactionally; settings, skins, replays, score databases, Java, and the body
 JAR are preserved.
 
+Launcher 0.2.27 adds a signed plugin-only mandatory policy. A manifest that
+sets `plugin_mandatory` must carry exactly one direct BMS-IR plugin artifact
+and require launcher 0.2.27 or newer. The launcher compares the installed JAR
+bytes with that signed artifact and blocks both UI and Rust launch paths until
+they match. The verified policy remains effective offline, while ordinary
+optional plugin updates keep the launch-current action. A plugin-only sparse
+release is not presented as a body update and does not rewrite the installed
+body-version marker.
+
 Before launching, the launcher validates canonical Java, body-JAR, and root
 paths. Only at the Java process boundary it converts compatible Windows
 extended-length paths such as `\\?\C:\...` back to their ordinary form, so the

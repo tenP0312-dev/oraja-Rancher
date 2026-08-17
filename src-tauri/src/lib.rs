@@ -293,10 +293,17 @@ fn run_background_check_once(app: &AppHandle) {
     current.last_background_check_millis = now;
     if let Ok(info) = update::check_installation(&root, install::is_ready(&installation)) {
         let release_key = format!(
-            "{}/{}",
-            info.available_version, info.available_launcher_version
+            "{}/{}/{}",
+            info.available_version,
+            info.available_launcher_version,
+            info.required_plugin
+                .as_ref()
+                .map(|plugin| plugin.version.as_str())
+                .unwrap_or("")
         );
-        let should_notify = (info.body_update_available || info.launcher_update_available)
+        let should_notify = (info.body_update_available
+            || info.launcher_update_available
+            || info.plugin_update_available)
             && release_key != current.last_notified_version;
         if should_notify {
             if let Some(tray) = app.tray_by_id("main-tray") {

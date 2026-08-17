@@ -15,6 +15,7 @@ const MAX_ANNOUNCEMENTS: usize = 20;
 const MAX_ANNOUNCEMENT_TITLE: usize = 200;
 const MAX_BOOTSTRAP_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_ARTIFACT_LOCATIONS: usize = 10_000;
+const PLUGIN_MANDATORY_MINIMUM_LAUNCHER_VERSION: &str = "0.2.27";
 pub const ARTIFACT_LOCATIONS_NAME: &str = "artifact-locations.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -59,6 +60,8 @@ pub struct ReleaseManifest {
     pub announcements: Vec<ReleaseAnnouncement>,
     #[serde(default)]
     pub mandatory: bool,
+    #[serde(default)]
+    pub plugin_mandatory: bool,
     #[serde(default)]
     pub minimum_launcher_version: String,
     #[serde(default)]
@@ -168,6 +171,22 @@ pub fn verify_manifest(
         return Err(ManifestError::Schema);
     }
     validate_artifacts(&manifest.artifacts)?;
+    if manifest.plugin_mandatory {
+        let plugin_count = manifest
+            .artifacts
+            .iter()
+            .filter(|artifact| is_bmsir_plugin_artifact(&artifact.path))
+            .count();
+        if plugin_count != 1
+            || !valid_version(&manifest.minimum_launcher_version)
+            || version_is_less(
+                &manifest.minimum_launcher_version,
+                PLUGIN_MANDATORY_MINIMUM_LAUNCHER_VERSION,
+            )
+        {
+            return Err(ManifestError::Schema);
+        }
+    }
     if !manifest.launcher_version.is_empty()
         && (!valid_version(&manifest.launcher_version) || !contains_platform_launcher(&manifest))
     {
@@ -213,6 +232,42 @@ fn valid_version(value: &str) -> bool {
                 && suffix
                     .bytes()
                     .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))))
+}
+
+fn is_bmsir_plugin_artifact(value: &str) -> bool {
+    let path = Path::new(value);
+    path.parent()
+        .and_then(Path::to_str)
+        .is_some_and(|parent| parent.eq_ignore_ascii_case("ir"))
+        && path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .is_some_and(|name| {
+                name.to_ascii_lowercase().starts_with("bms_ir")
+                    && name.to_ascii_lowercase().ends_with(".jar")
+            })
+}
+
+fn version_is_less(left: &str, right: &str) -> bool {
+    let parse = |value: &str| {
+        value
+            .split_once('-')
+            .map_or(value, |(main, _)| main)
+            .split('.')
+            .map(|part| part.parse::<u64>().unwrap_or(0))
+            .collect::<Vec<_>>()
+    };
+    let left = parse(left);
+    let right = parse(right);
+    let length = left.len().max(right.len());
+    (0..length).find_map(|index| {
+        let ordering = left
+            .get(index)
+            .copied()
+            .unwrap_or(0)
+            .cmp(&right.get(index).copied().unwrap_or(0));
+        (ordering != std::cmp::Ordering::Equal).then_some(ordering)
+    }) == Some(std::cmp::Ordering::Less)
 }
 
 fn contains_platform_launcher(manifest: &ReleaseManifest) -> bool {
@@ -592,12 +647,46 @@ mod tests {
     #[test]
     fn verifies_canonical_manifest_and_rejects_tampering() {
         let (input, key) = signed_manifest();
-        assert_eq!(verify_manifest(&input, &key).unwrap().version, "0.4.0");
+        let manifest = verify_manifest(&input, &key).unwrap();
+        assert_eq!(manifest.version, "0.4.0");
+        assert!(!manifest.plugin_mandatory);
         let tampered = input.replace("0.4.0", "9.9.9");
         assert!(matches!(
             verify_manifest(&tampered, &key),
             Err(ManifestError::Signature)
         ));
+    }
+
+    #[test]
+    fn plugin_mandatory_requires_one_plugin_and_launcher_0_2_27() {
+        let signing = SigningKey::from_bytes(&[12_u8; 32]);
+        let plugin = json!({
+            "path": "ir/bms_ir_arena_0.0.73.jar",
+            "sha256": "11".repeat(32),
+            "size": 1,
+            "executable": false
+        });
+        let signed = |minimum_launcher_version: &str, artifacts: Value| {
+            let mut value = json!({
+                "schema_version": 1,
+                "channel": "test",
+                "platform": "windows-x64",
+                "version": "0.4.14.54",
+                "published_at": "2026-08-18T00:00:00Z",
+                "plugin_mandatory": true,
+                "minimum_launcher_version": minimum_launcher_version,
+                "revoked_versions": [],
+                "artifacts": artifacts
+            });
+            let signature = signing.sign(&serde_jcs::to_vec(&value).unwrap());
+            value["signature"] = Value::String(STANDARD.encode(signature.to_bytes()));
+            serde_json::to_string(&value).unwrap()
+        };
+        let key = STANDARD.encode(signing.verifying_key().to_bytes());
+        let manifest = verify_manifest(&signed("0.2.27", json!([plugin.clone()])), &key).unwrap();
+        assert!(manifest.plugin_mandatory);
+        assert!(verify_manifest(&signed("0.2.26", json!([plugin])), &key).is_err());
+        assert!(verify_manifest(&signed("0.2.27", json!([])), &key).is_err());
     }
 
     #[test]
