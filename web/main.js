@@ -33,7 +33,7 @@ const dictionary = {
     updating: "更新ファイルを検証して適用しています",
     installing: "本体ファイルを検証してセットアップしています",
     details: "詳細",
-    information: "アップデート・イベント情報",
+    information: "最新情報",
     noInformation: "現在のお知らせはありません",
     policyInvalid: "保存された更新判定を検証できません。オンライン更新確認が必要です",
     updateUnconfigured: "このランチャーには更新先が設定されていません",
@@ -84,7 +84,7 @@ const dictionary = {
     pluginInstall: "このプラグインを適用",
     pluginDeprecated: "旧プラグイン版",
     pluginReleaseVersion: "プラグイン {plugin} / 本体リリース {release}",
-    subtitle: "プレイ・更新・管理",
+    subtitle: "Arena oraja launcher",
     close: "閉じる",
     accountMenu: "アカウント",
     launchEyebrow: "PLAY / UPDATE",
@@ -92,9 +92,9 @@ const dictionary = {
     primaryActionsLabel: "主な操作",
     playHint: "準備済みの本体ですぐにプレイ",
     updateAllHint: "必要なコンポーネントをまとめて更新",
-    configureHint: "詳細なゲームコンフィグを開く",
+    configureHint: "詳細コンフィグ",
     bmsirSettings: "BMS-IR設定",
-    bmsirSettingsHint: "アカウントとIR固有設定",
+    bmsirSettingsHint: "アカウントとIR設定",
     quickToolsEyebrow: "QUICK SETTINGS",
     quickToolsTitle: "よく使う設定",
     jukeboxTitle: "ジュークボックス",
@@ -107,11 +107,13 @@ const dictionary = {
     informationEyebrow: "EVENT LOG",
     systemEyebrow: "SYSTEM",
     systemTitle: "バージョン状態",
+    systemSummary: "バージョンと詳細管理",
     latestRelease: "最新リリース",
     advancedEyebrow: "ADVANCED",
     advancedTitle: "詳細管理",
     quickToolMockNotice: "操作感を確認するためのモックです。入力内容は送信・保存されず、config.jsonも変更しません。",
     mockDone: "閉じる",
+    mockScope: "クイック設定の入力はまだ保存されません",
     residentOn: "常駐 ON",
     residentOff: "常駐 OFF",
     settingsOpen: "設定",
@@ -123,6 +125,8 @@ const dictionary = {
     settingsBackgroundCheckHint: "1日1回確認し、トレイに更新を表示します",
     settingsAutostart: "ログイン時に起動",
     settingsAutostartHint: "常駐がONのときに利用できます",
+    settingsLanguage: "表示言語",
+    settingsLanguageHint: "日本語と英語を切り替えます",
     settingsSaveError: "設定を保存できませんでした",
     deprecatedWarning: "非推奨版はサポート対象外です。本体だけを切り替え、設定やスコアは変更しません。"
   },
@@ -155,7 +159,7 @@ const dictionary = {
     updating: "Verifying and applying the update",
     installing: "Verifying and installing the game files",
     details: "Details",
-    information: "Updates and event information",
+    information: "Latest information",
     noInformation: "There are no current announcements",
     policyInvalid: "The saved update policy is invalid. An online update check is required",
     updateUnconfigured: "This launcher has no update endpoint configured",
@@ -206,7 +210,7 @@ const dictionary = {
     pluginInstall: "Apply this plugin",
     pluginDeprecated: "Older plugin release",
     pluginReleaseVersion: "Plugin {plugin} / body release {release}",
-    subtitle: "Play, update, and manage",
+    subtitle: "Arena oraja launcher",
     close: "Close",
     accountMenu: "Account",
     launchEyebrow: "PLAY / UPDATE",
@@ -214,9 +218,9 @@ const dictionary = {
     primaryActionsLabel: "Primary actions",
     playHint: "Launch the verified installed body",
     updateAllHint: "Update every component that needs it",
-    configureHint: "Open the full game configuration",
+    configureHint: "Full configuration",
     bmsirSettings: "BMS-IR settings",
-    bmsirSettingsHint: "Account and IR-specific settings",
+    bmsirSettingsHint: "Account and IR settings",
     quickToolsEyebrow: "QUICK SETTINGS",
     quickToolsTitle: "Frequently used settings",
     jukeboxTitle: "Jukebox",
@@ -229,11 +233,13 @@ const dictionary = {
     informationEyebrow: "EVENT LOG",
     systemEyebrow: "SYSTEM",
     systemTitle: "Version status",
+    systemSummary: "Versions and advanced management",
     latestRelease: "Latest release",
     advancedEyebrow: "ADVANCED",
     advancedTitle: "Advanced management",
     quickToolMockNotice: "This interaction mock does not send or save input and never changes config.json.",
     mockDone: "Close",
+    mockScope: "Quick-setting input is not saved yet",
     residentOn: "Resident ON",
     residentOff: "Resident OFF",
     settingsOpen: "Settings",
@@ -245,6 +251,8 @@ const dictionary = {
     settingsBackgroundCheckHint: "Check daily and show updates in the tray",
     settingsAutostart: "Launch at login",
     settingsAutostartHint: "Available while tray residency is enabled",
+    settingsLanguage: "Display language",
+    settingsLanguageHint: "Switch between Japanese and English",
     settingsSaveError: "Could not save settings",
     deprecatedWarning: "Deprecated versions are unsupported. Only the game body changes; settings and scores are preserved."
   }
@@ -295,9 +303,6 @@ function applyLanguage() {
 
 function renderSettings() {
   const resident = Boolean(launcherSettings?.resident);
-  byId("resident-label").textContent = tr(resident ? "residentOn" : "residentOff");
-  byId("resident-state").setAttribute("aria-pressed", String(resident));
-  byId("resident-state").dataset.enabled = String(resident);
   byId("setting-resident").checked = resident;
   byId("setting-background-check").checked = Boolean(launcherSettings?.background_check);
   byId("setting-autostart").checked = Boolean(launcherSettings?.autostart);
@@ -783,6 +788,7 @@ function renderStatusCards() {
       setBadge(bodyBadge, "available", tr("statusUpdateAvailable"));
     }
   }
+  byId("hero-version").textContent = bodyLine.textContent;
 
   const installedLauncher = update?.installed_launcher_version || state.launcher_version;
   const availableLauncher = update?.available_launcher_version || installedLauncher;
@@ -1087,7 +1093,6 @@ document.querySelectorAll("[data-quick-tool]").forEach(button => {
 });
 byId("quick-tool-dialog-close").addEventListener("click", closeQuickTool);
 byId("quick-tool-dialog-done").addEventListener("click", closeQuickTool);
-byId("resident-state").addEventListener("click", () => saveSetting("resident", !launcherSettings?.resident));
 byId("setting-resident").addEventListener("change", event => saveSetting("resident", event.target.checked));
 byId("setting-background-check").addEventListener("change", event => saveSetting("background_check", event.target.checked));
 byId("setting-autostart").addEventListener("change", event => saveSetting("autostart", event.target.checked));

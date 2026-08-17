@@ -6,11 +6,13 @@ There is no installer, MSI, registry write, administrator requirement, Start
 Menu registration, or folder picker. Existing BAT and command launch remain
 valid.
 
-The launcher home is organized around the three choices needed before normal
-play: launch or update Arena, open the existing full configuration with `-c`,
-or review BMS-IR-specific settings. Launch is the dominant action. Signed
-release notes, update checks, component versions, announcements, and advanced
-version/plugin management remain available without competing with that path.
+The compact single-column launcher home is organized around the three choices
+needed before normal play: launch or update Arena, open the existing full
+configuration with `-c`, or review BMS-IR-specific settings. Launch is the
+dominant action. Jukebox, skin, and difficulty-table shortcuts sit in one row;
+component versions and advanced version/plugin management stay collapsed until
+requested. Signed release notes and the two newest announcements remain visible
+without turning the launcher into a status dashboard.
 
 The current BMS-IR, jukebox, skin, and difficulty-table quick settings are an
 explicit UI review mock. They accept temporary in-window choices only and do
@@ -28,8 +30,9 @@ The dedicated game body is `Arena-oraja.jar`. Existing `beatoraja.jar` and
 versioned Arena oraja JARs remain launchable only as compatibility fallbacks;
 the updater never deletes or overwrites a user's ordinary `beatoraja.jar`.
 
-The header always identifies the installed body version, selected update
-channel, and launcher version separately. During an installation or update,
+The launch stage identifies the installed body version and latest release time.
+The collapsed system section identifies the body, launcher, and plugin
+versions separately. During an installation or update,
 the status band shows byte-accurate overall progress, transferred and total
 size, and verified file count. After transfer it reports the verification,
 application, and launcher-restart phases instead of leaving the window on an

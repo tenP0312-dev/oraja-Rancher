@@ -13,129 +13,114 @@
       <span class="brand-mark" aria-hidden="true">IR</span>
       <div>
         <h1>BMS-IR Arena</h1>
-        <p data-i18n="subtitle">プレイ・更新・管理</p>
+        <p data-i18n="subtitle">Arena oraja launcher</p>
       </div>
     </div>
     <div class="header-actions">
-      <button id="resident-state" class="resident-state quiet" type="button" aria-pressed="false">
-        <span class="resident-dot" aria-hidden="true"></span>
-        <span id="resident-label">常駐 OFF</span>
-      </button>
       <button id="bmsir-account-open" class="account-button quiet" type="button" aria-haspopup="dialog">
         <span class="account-avatar" aria-hidden="true">
           <svg viewBox="0 0 24 24" focusable="false"><path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-7 8a7 7 0 0 1 14 0"/></svg>
         </span>
         <span><small>BMS-IR</small><strong data-i18n="accountMenu">アカウント</strong></span>
-        <span class="mock-badge">MOCK</span>
       </button>
       <button id="settings-open" class="quiet icon-button" type="button" data-i18n-aria-label="settingsOpen" aria-label="ランチャー設定" title="ランチャー設定">
         <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="m19.4 15 .1.1 1.4 1.1-2 3.4-1.7-.7-.2-.1a8.4 8.4 0 0 1-2.1 1.2l-.2.1-.3 1.9h-4l-.3-1.9-.2-.1a8.4 8.4 0 0 1-2.1-1.2l-.2.1-1.7.7-2-3.4 1.4-1.1.1-.1a8 8 0 0 1 0-2.5l-.1-.1L4.1 9.9l2-3.4 1.7.7.2.1a8.4 8.4 0 0 1 2.1-1.2l.2-.1.3-1.9h4l.3 1.9.2.1a8.4 8.4 0 0 1 2.1 1.2l.2-.1 1.7-.7 2 3.4-1.4 1.1-.1.1a8 8 0 0 1 0 2.5Z"/></svg>
       </button>
-      <button id="language" class="quiet language-button" type="button" aria-label="英語に切り替え" title="英語に切り替え">
-        <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3.5 9h17M3.5 15h17M12 3c2.2 2.5 3.2 5.5 3.2 9s-1 6.5-3.2 9c-2.2-2.5-3.2-5.5-3.2-9s1-6.5 3.2-9Z"/></svg>
-        <span id="language-label">日本語</span>
-      </button>
     </div>
   </header>
 
-  <div class="dashboard-grid">
-    <div class="main-column">
-      <section class="launch-panel" aria-labelledby="launch-title">
-        <div class="panel-heading launch-heading">
-          <div>
-            <p class="eyebrow" data-i18n="launchEyebrow">PLAY / UPDATE</p>
-            <h2 id="launch-title" data-i18n="launchTitle">Arenaをはじめる</h2>
-          </div>
-          <button id="release-notes-open" class="text-button" type="button" data-i18n="releaseNotesOpen">更新内容を見る</button>
-        </div>
-
-        <div class="status-band" aria-live="polite">
-          <span id="status-mark" aria-hidden="true"></span>
-          <div>
-            <strong id="update-status" data-i18n="checking">更新を確認しています</strong>
-            <p id="installation-status"></p>
-            <div id="update-progress" class="update-progress" hidden>
-              <div class="progress-heading"><span id="progress-label"></span><strong id="progress-percent">0%</strong></div>
-              <progress id="progress-bar" max="100" value="0">0%</progress>
-              <p id="progress-detail"></p>
-            </div>
-          </div>
-        </div>
-
-        <section id="primary-actions" class="primary-actions" data-i18n-aria-label="primaryActionsLabel" aria-label="主な操作">
-          <button id="play" class="action-button action-primary" type="button" disabled>
-            <span class="action-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="m9 6 9 6-9 6V6Z"/></svg></span>
-            <span><strong data-i18n="play">Arenaを起動</strong><small data-i18n="playHint">準備済みの本体ですぐにプレイ</small></span>
-          </button>
-          <button id="update-all" class="action-button action-primary" type="button" hidden>
-            <span class="action-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M12 4v10m0 0 4-4m-4 4-4-4M5 19h14"/></svg></span>
-            <span><strong data-i18n="updateAll">すべて更新</strong><small data-i18n="updateAllHint">必要なコンポーネントをまとめて更新</small></span>
-          </button>
-          <button id="configure" class="action-button" type="button" disabled>
-            <span class="action-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M4 6h10M18 6h2M4 12h3M11 12h9M4 18h8M16 18h4"/><circle cx="16" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="14" cy="18" r="2"/></svg></span>
-            <span><strong data-i18n="configure">本体設定</strong><small data-i18n="configureHint">詳細なゲームコンフィグを開く</small></span>
-          </button>
-          <button id="bmsir-settings-open" class="action-button" type="button" aria-haspopup="dialog">
-            <span class="action-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M5 5h14v14H5z"/><path d="M8 9h8M8 13h5M8 17h3"/></svg></span>
-            <span><strong data-i18n="bmsirSettings">BMS-IR設定</strong><small data-i18n="bmsirSettingsHint">アカウントとIR固有設定</small></span>
-            <span class="mock-badge">MOCK</span>
-          </button>
-          <button id="launch-current" class="launch-current" type="button" hidden data-i18n="launchCurrent">現在の版を起動</button>
-        </section>
-      </section>
-
-      <section class="quick-tools" aria-labelledby="quick-tools-title">
-        <div class="panel-heading">
-          <div>
-            <p class="eyebrow" data-i18n="quickToolsEyebrow">QUICK SETTINGS</p>
-            <h2 id="quick-tools-title" data-i18n="quickToolsTitle">よく使う設定</h2>
-          </div>
-          <span class="mock-badge">UI MOCK</span>
-        </div>
-        <div class="quick-tool-grid">
-          <button class="quick-tool" type="button" data-quick-tool="jukebox" aria-haspopup="dialog">
-            <span class="quick-tool-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M9 18V6l10-2v12"/><circle cx="6" cy="18" r="3"/><circle cx="16" cy="16" r="3"/></svg></span>
-            <span><strong data-i18n="jukeboxTitle">ジュークボックス</strong><small data-i18n="jukeboxHint">選曲セットを切り替える</small></span>
-            <svg class="chevron" viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
-          </button>
-          <button class="quick-tool" type="button" data-quick-tool="skin" aria-haspopup="dialog">
-            <span class="quick-tool-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M4 5h16v14H4z"/><path d="M4 9h16M9 9v10"/></svg></span>
-            <span><strong data-i18n="skinTitle">スキン</strong><small data-i18n="skinHint">使用スキンを選ぶ</small></span>
-            <svg class="chevron" viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
-          </button>
-          <button class="quick-tool" type="button" data-quick-tool="tables" aria-haspopup="dialog">
-            <span class="quick-tool-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M5 4h14v16H5zM5 9h14M10 9v11"/></svg></span>
-            <span><strong data-i18n="tablesTitle">難易度表</strong><small data-i18n="tablesHint">テーブルを追加・整理する</small></span>
-            <svg class="chevron" viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
-          </button>
-        </div>
-        <p class="mock-footnote" data-i18n="mockFootnote">この段階では画面構成だけのモックです。config.jsonへの書き込みや設定保存は行いません。</p>
-      </section>
-
-      <section class="information" aria-labelledby="information-title">
-        <div class="panel-heading">
-          <div>
-            <p class="eyebrow" data-i18n="informationEyebrow">EVENT LOG</p>
-            <h2 id="information-title" data-i18n="information">アップデート・イベント情報</h2>
-          </div>
-        </div>
-        <ul id="announcements" aria-live="polite"><li class="empty-information" data-i18n="noInformation">現在のお知らせはありません</li></ul>
-      </section>
+  <section class="launch-stage" aria-labelledby="launch-title">
+    <div class="lane-motif" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
+    <div class="stage-heading">
+      <div>
+        <p class="eyebrow" data-i18n="launchEyebrow">PLAY / UPDATE</p>
+        <h2 id="launch-title" data-i18n="launchTitle">Arenaをはじめる</h2>
+      </div>
+      <button id="release-notes-open" class="text-button" type="button" data-i18n="releaseNotesOpen">更新内容を見る</button>
     </div>
 
-    <aside class="side-rail">
+    <div class="status-line" aria-live="polite">
+      <span id="status-mark" aria-hidden="true"></span>
+      <div>
+        <strong id="update-status" data-i18n="checking">更新を確認しています</strong>
+        <p id="installation-status"></p>
+      </div>
+    </div>
+
+    <div id="update-progress" class="update-progress" hidden>
+      <div class="progress-heading"><span id="progress-label"></span><strong id="progress-percent">0%</strong></div>
+      <progress id="progress-bar" max="100" value="0">0%</progress>
+      <p id="progress-detail"></p>
+    </div>
+
+    <div class="version-summary">
+      <span><small data-i18n="statusBody">本体</small><strong id="hero-version">…</strong></span>
+      <span><small data-i18n="latestRelease">最新リリース</small><strong id="latest-release-time">—</strong></span>
+    </div>
+
+    <section id="primary-actions" class="primary-actions" data-i18n-aria-label="primaryActionsLabel" aria-label="主な操作">
+      <button id="play" class="action-button action-primary" type="button" disabled>
+        <span class="action-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="m9 6 9 6-9 6V6Z"/></svg></span>
+        <span><strong data-i18n="play">Arenaを起動</strong><small data-i18n="playHint">準備済みの本体ですぐにプレイ</small></span>
+      </button>
+      <button id="update-all" class="action-button action-primary" type="button" hidden>
+        <span class="action-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M12 4v10m0 0 4-4m-4 4-4-4M5 19h14"/></svg></span>
+        <span><strong data-i18n="updateAll">すべて更新</strong><small data-i18n="updateAllHint">必要なコンポーネントをまとめて更新</small></span>
+      </button>
+      <div class="secondary-actions">
+        <button id="configure" class="action-button action-secondary" type="button" disabled>
+          <span class="action-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M4 6h10M18 6h2M4 12h3M11 12h9M4 18h8M16 18h4"/><circle cx="16" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="14" cy="18" r="2"/></svg></span>
+          <span><strong data-i18n="configure">本体設定</strong><small data-i18n="configureHint">詳細コンフィグ</small></span>
+        </button>
+        <button id="bmsir-settings-open" class="action-button action-secondary" type="button" aria-haspopup="dialog">
+          <span class="action-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M5 5h14v14H5z"/><path d="M8 9h8M8 13h5M8 17h3"/></svg></span>
+          <span><strong data-i18n="bmsirSettings">BMS-IR設定</strong><small data-i18n="bmsirSettingsHint">アカウントとIR設定</small></span>
+        </button>
+      </div>
+      <button id="launch-current" class="launch-current" type="button" hidden data-i18n="launchCurrent">現在の版を起動</button>
+    </section>
+  </section>
+
+  <section class="quick-tools" aria-labelledby="quick-tools-title">
+    <h2 id="quick-tools-title" class="visually-hidden" data-i18n="quickToolsTitle">よく使う設定</h2>
+    <div class="quick-tool-grid">
+      <button class="quick-tool" type="button" data-quick-tool="jukebox" aria-haspopup="dialog">
+        <span class="quick-tool-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M9 18V6l10-2v12"/><circle cx="6" cy="18" r="3"/><circle cx="16" cy="16" r="3"/></svg></span>
+        <strong data-i18n="jukeboxTitle">ジュークボックス</strong>
+      </button>
+      <button class="quick-tool" type="button" data-quick-tool="skin" aria-haspopup="dialog">
+        <span class="quick-tool-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M4 5h16v14H4z"/><path d="M4 9h16M9 9v10"/></svg></span>
+        <strong data-i18n="skinTitle">スキン</strong>
+      </button>
+      <button class="quick-tool" type="button" data-quick-tool="tables" aria-haspopup="dialog">
+        <span class="quick-tool-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M5 4h14v16H5zM5 9h14M10 9v11"/></svg></span>
+        <strong data-i18n="tablesTitle">難易度表</strong>
+      </button>
+    </div>
+  </section>
+
+  <section class="information" aria-labelledby="information-title">
+    <div class="section-heading">
+      <h2 id="information-title" data-i18n="information">最新情報</h2>
+      <span class="section-rule" aria-hidden="true"></span>
+    </div>
+    <ul id="announcements" aria-live="polite"><li class="empty-information" data-i18n="noInformation">現在のお知らせはありません</li></ul>
+  </section>
+
+  <details class="system-drawer">
+    <summary>
+      <span><small data-i18n="systemEyebrow">SYSTEM</small><strong data-i18n="systemSummary">バージョンと詳細管理</strong></span>
+      <span class="summary-action" data-i18n="details">詳細</span>
+    </summary>
+    <div class="system-content">
       <section class="system-panel" aria-labelledby="system-title">
         <div class="panel-heading">
-          <div>
-            <p class="eyebrow" data-i18n="systemEyebrow">SYSTEM</p>
-            <h2 id="system-title" data-i18n="systemTitle">バージョン状態</h2>
-          </div>
+          <h2 id="system-title" data-i18n="systemTitle">バージョン状態</h2>
           <button id="check" class="icon-text-button" type="button">
             <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M18.4 10a7 7 0 0 0-12-3L4 9m16 6-2.4 2a7 7 0 0 1-12-3"/></svg>
             <span data-i18n="check">更新を確認</span>
           </button>
         </div>
-
         <div class="status-cards" aria-live="polite">
           <article class="status-card">
             <div><p class="status-card-label" data-i18n="statusBody">本体</p><p id="body-version-line" class="status-card-version">…</p></div>
@@ -150,17 +135,10 @@
             <div class="card-action"><span id="plugin-badge" class="status-badge" data-kind="neutral"></span><button id="plugin-update" class="small-button" type="button" hidden data-i18n="updatePlugin">プラグインを更新</button></div>
           </article>
         </div>
-
-        <div class="release-meta">
-          <span data-i18n="latestRelease">最新リリース</span>
-          <strong id="latest-release-time">—</strong>
-        </div>
       </section>
 
       <section class="advanced-panel" aria-labelledby="advanced-title">
-        <div class="panel-heading">
-          <div><p class="eyebrow" data-i18n="advancedEyebrow">ADVANCED</p><h2 id="advanced-title" data-i18n="advancedTitle">詳細管理</h2></div>
-        </div>
+        <h2 id="advanced-title" data-i18n="advancedTitle">詳細管理</h2>
         <div class="deprecated-panel">
           <button id="plugin-toggle" class="quiet disclosure-button" type="button" data-i18n="pluginToggle" aria-expanded="false" aria-controls="plugin-list-container">Arenaプラグインの更新・旧版</button>
           <div id="plugin-list-container" hidden>
@@ -178,10 +156,11 @@
           </div>
         </div>
       </section>
+    </div>
+  </details>
 
-      <details id="details" hidden><summary data-i18n="details">詳細</summary><pre id="error-detail"></pre></details>
-    </aside>
-  </div>
+  <details id="details" hidden><summary data-i18n="details">詳細</summary><pre id="error-detail"></pre></details>
+  <footer class="mock-scope"><span class="mock-badge">UI MOCK</span><span data-i18n="mockScope">クイック設定の入力はまだ保存されません</span></footer>
 </main>
 
 <dialog id="release-dialog" class="modal" aria-labelledby="release-dialog-title">
@@ -205,6 +184,13 @@
     <label class="settings-row"><span><strong data-i18n="settingsResident">常駐（トレイ）</strong><small data-i18n="settingsResidentHint">Arena起動後やウィンドウを閉じた後も常駐します</small></span><input id="setting-resident" type="checkbox"></label>
     <label class="settings-row"><span><strong data-i18n="settingsBackgroundCheck">バックグラウンド更新確認</strong><small data-i18n="settingsBackgroundCheckHint">1日1回確認し、トレイに更新を表示します</small></span><input id="setting-background-check" type="checkbox"></label>
     <label class="settings-row"><span><strong data-i18n="settingsAutostart">ログイン時に起動</strong><small data-i18n="settingsAutostartHint">常駐がONのときに利用できます</small></span><input id="setting-autostart" type="checkbox"></label>
+    <div class="settings-row">
+      <span><strong data-i18n="settingsLanguage">表示言語</strong><small data-i18n="settingsLanguageHint">日本語と英語を切り替えます</small></span>
+      <button id="language" class="language-button quiet" type="button" aria-label="英語に切り替え" title="英語に切り替え">
+        <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3.5 9h17M3.5 15h17M12 3c2.2 2.5 3.2 5.5 3.2 9s-1 6.5-3.2 9c-2.2-2.5-3.2-5.5-3.2-9s1-6.5 3.2-9Z"/></svg>
+        <span id="language-label">日本語</span>
+      </button>
+    </div>
   </div>
 </dialog>
 
