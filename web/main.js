@@ -282,11 +282,11 @@ function renderPlugins() {
   toggle.setAttribute("aria-expanded", String(pluginVisible));
   container.hidden = !pluginVisible;
   if (!pluginVisible) return;
-  const pluginUpdate = pluginStatus?.update_available ? pluginStatus.available : null;
-  byId("plugin-current").textContent = pluginUnavailable
-    ? tr("pluginCheckUnavailable")
-    : pluginUpdate
-      ? tr("pluginCurrent").replace("{version}", pluginVersionLabel(pluginUpdate))
+  const pluginUpdate = selectedPluginUpdate();
+  byId("plugin-current").textContent = pluginUpdate
+    ? tr("pluginCurrent").replace("{version}", pluginVersionLabel(pluginUpdate))
+    : pluginUnavailable
+      ? tr("pluginCheckUnavailable")
       : tr("pluginCurrentOk");
   const list = byId("plugin-list");
   list.replaceChildren();
@@ -302,6 +302,14 @@ function pluginVersionLabel(entry) {
   const filename = String(entry?.artifact_path || "").split("/").pop() || "";
   const versionMatch = filename.match(/_(\d+(?:\.\d+)+(?:[-+][A-Za-z0-9.-]+)?)\.jar$/i);
   return versionMatch ? versionMatch[1] : filename || String(entry?.version || "");
+}
+
+function selectedPluginUpdate() {
+  if (pluginStatus?.update_available) return pluginStatus.available;
+  if (update?.plugin_mandatory && update?.plugin_update_available) {
+    return update.required_plugin || null;
+  }
+  return null;
 }
 
 function appendPluginRelease(list, entry, deprecated) {
@@ -354,9 +362,9 @@ async function installPlugin(version) {
   renderUpdate(); renderProgress();
   try {
     await invoke("install_plugin_version", {version});
-    [pluginStatus, pluginVersions] = await Promise.all([
-      invoke("check_plugin_update"), invoke("list_deprecated_plugin_versions")
-    ]);
+    await loadState();
+    if (state) await checkUpdate();
+    pluginVersions = await invoke("list_deprecated_plugin_versions");
     pluginUnavailable = false;
     hideError();
   } catch (error) { showError(error); }
@@ -596,7 +604,8 @@ function updateBlocksLaunch() {
   return update.status === "install_required"
     || update.status === "revoked"
     || update.status === "launcher_too_old"
-    || ((update.body_update_available || update.launcher_update_available) && update.mandatory);
+    || ((update.body_update_available || update.launcher_update_available) && update.mandatory)
+    || (update.plugin_mandatory && update.plugin_update_available);
 }
 
 function localizedReleaseNotes() {
@@ -646,7 +655,7 @@ function renderStatusCards() {
   const bodyBadge = byId("body-badge");
   const bodyUpdate = Boolean(update?.body_update_available);
   const launcherUpdate = Boolean(update?.launcher_update_available);
-  const pluginUpdate = Boolean(pluginStatus?.update_available);
+  const pluginUpdate = Boolean(selectedPluginUpdate());
 
   if (checking) {
     bodyLine.textContent = installedVersion;
@@ -687,16 +696,24 @@ function renderStatusCards() {
   }
 
   const installedPlugin = installedPluginVersion();
-  const availablePlugin = pluginStatus ? pluginVersionLabel(pluginStatus.available) : "";
+  const availablePluginEntry = selectedPluginUpdate()
+    || pluginStatus?.available
+    || update?.required_plugin;
+  const availablePlugin = availablePluginEntry ? pluginVersionLabel(availablePluginEntry) : "";
   if (checking) {
     byId("plugin-version-line").textContent = installedPlugin;
     setBadge(byId("plugin-badge"), "neutral", tr("statusChecking"));
+  } else if (pluginUpdate) {
+    byId("plugin-version-line").textContent = `${installedPlugin} → ${availablePlugin}`;
+    const required = Boolean(update?.plugin_mandatory && update?.plugin_update_available);
+    setBadge(
+      byId("plugin-badge"),
+      required ? "warning" : "available",
+      tr(required ? "statusMandatory" : "statusUpdateAvailable")
+    );
   } else if (pluginUnavailable || !pluginStatus) {
     byId("plugin-version-line").textContent = installedPlugin;
     setBadge(byId("plugin-badge"), "warning", tr("statusUnavailable"));
-  } else if (pluginUpdate) {
-    byId("plugin-version-line").textContent = `${installedPlugin} → ${availablePlugin}`;
-    setBadge(byId("plugin-badge"), "available", tr("statusUpdateAvailable"));
   } else {
     byId("plugin-version-line").textContent = availablePlugin;
     setBadge(byId("plugin-badge"), "ok", tr("statusUpToDate"));
@@ -711,7 +728,9 @@ function renderStatusCards() {
 }
 
 function renderReleasePanel() {
-  const current = !update?.body_update_available && !update?.launcher_update_available;
+  const current = !update?.body_update_available
+    && !update?.launcher_update_available
+    && !update?.plugin_update_available;
   byId("release-notes-open").disabled = !update;
   if (!update) return;
   byId("release-dialog-title").textContent = current
@@ -730,7 +749,7 @@ function renderUpdate() {
   const installed = Boolean(state.installation_ready);
   const blocked = updateBlocksLaunch();
   const mainUpdates = Boolean(update?.body_update_available || update?.launcher_update_available);
-  const pluginUpdate = Boolean(pluginStatus?.update_available);
+  const pluginUpdate = Boolean(selectedPluginUpdate());
   const hasUpdates = mainUpdates || pluginUpdate;
   const allCurrent = Boolean(update && pluginStatus) && !hasUpdates && !pluginUnavailable;
   byId("installation-status").textContent = pluginUnavailable && installed
@@ -773,7 +792,7 @@ function renderUpdate() {
     return;
   }
 
-  if (pluginUnavailable && !mainUpdates) {
+  if (pluginUnavailable && !mainUpdates && !updateBlocksLaunch()) {
     setStatus(tr("pluginCheckUnavailable"), "warning");
     return;
   }
@@ -787,7 +806,7 @@ function renderUpdate() {
     setStatus(tr("revoked"), "error");
   } else if (update.status === "launcher_too_old") {
     setStatus(tr("launcherOld"), "error");
-  } else if (update.mandatory) {
+  } else if (update.mandatory || (update.plugin_mandatory && update.plugin_update_available)) {
     setStatus(tr("mandatory"), "warning");
   } else {
     setStatus(
@@ -918,8 +937,9 @@ async function installSelected(target) {
   setStatus(tr(update?.status === "install_required" ? "installing" : "updating"), "available");
   try {
     const mainUpdateAvailable = Boolean(update?.body_update_available || update?.launcher_update_available);
-    if (target === "all" && pluginStatus?.update_available) {
-      await invoke("install_plugin_version", {version: pluginStatus.available.version});
+    const pluginUpdate = selectedPluginUpdate();
+    if (target === "all" && pluginUpdate) {
+      await invoke("install_plugin_version", {version: pluginUpdate.version});
     }
     if (mainUpdateAvailable || target !== "all") {
       await invoke("install_online_update", {target, launchAfter: false});
@@ -952,7 +972,8 @@ byId("update-all").addEventListener("click", () => installSelected("all"));
 byId("body-update").addEventListener("click", () => installSelected("body"));
 byId("launcher-update").addEventListener("click", () => installSelected("launcher"));
 byId("plugin-update").addEventListener("click", () => {
-  if (pluginStatus?.available?.version) installPlugin(pluginStatus.available.version);
+  const pluginUpdate = selectedPluginUpdate();
+  if (pluginUpdate?.version) installPlugin(pluginUpdate.version);
 });
 byId("launch-current").addEventListener("click", () => launch(false));
 byId("deprecated-toggle").addEventListener("click", toggleDeprecated);

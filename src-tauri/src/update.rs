@@ -94,6 +94,9 @@ pub struct UpdateInfo {
     pub available_launcher_version: String,
     pub body_update_available: bool,
     pub launcher_update_available: bool,
+    pub plugin_update_available: bool,
+    pub plugin_mandatory: bool,
+    pub required_plugin: Option<PluginRelease>,
     pub available_published_at: String,
     pub status: String,
     pub mandatory: bool,
@@ -663,27 +666,39 @@ pub(crate) fn release_for_target_with_launcher(
     Ok(selected)
 }
 
+fn is_plugin_artifact(artifact: &ReleaseArtifact) -> bool {
+    let path = Path::new(&artifact.path);
+    path.parent()
+        .and_then(Path::to_str)
+        .is_some_and(|parent| parent.eq_ignore_ascii_case("ir"))
+        && path
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| value.eq_ignore_ascii_case("jar"))
+        && path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| value.to_ascii_lowercase().starts_with("bms_ir"))
+}
+
 fn release_plugin_artifact(manifest: &ReleaseManifest) -> Option<&ReleaseArtifact> {
-    let mut plugins = manifest.artifacts.iter().filter(|artifact| {
-        let path = Path::new(&artifact.path);
-        path.parent()
-            .and_then(Path::to_str)
-            .is_some_and(|parent| parent.eq_ignore_ascii_case("ir"))
-            && path
-                .extension()
-                .and_then(|value| value.to_str())
-                .is_some_and(|value| value.eq_ignore_ascii_case("jar"))
-            && path
-                .file_name()
-                .and_then(|value| value.to_str())
-                .is_some_and(|value| value.to_ascii_lowercase().starts_with("bms_ir"))
-    });
+    let mut plugins = manifest
+        .artifacts
+        .iter()
+        .filter(|artifact| is_plugin_artifact(artifact));
     let plugin = plugins.next()?;
     if plugins.next().is_some() {
         None
     } else {
         Some(plugin)
     }
+}
+
+fn release_contains_body_update(manifest: &ReleaseManifest) -> bool {
+    manifest
+        .artifacts
+        .iter()
+        .any(|artifact| !is_launcher_artifact(manifest, artifact) && !is_plugin_artifact(artifact))
 }
 
 /// A plugin release is identified by its signed channel release, rather than
@@ -713,6 +728,24 @@ fn plugin_release(manifest: &ReleaseManifest) -> Option<(PluginRelease, ReleaseA
         },
         artifact,
     ))
+}
+
+fn required_plugin_policy(
+    root: &Path,
+    manifest: &ReleaseManifest,
+) -> Result<(Option<PluginRelease>, bool), UpdateError> {
+    if !manifest.plugin_mandatory {
+        return Ok((None, false));
+    }
+    let (release, artifact) = plugin_release(manifest).ok_or(UpdateError::Manifest(
+        crate::manifest::ManifestError::Schema,
+    ))?;
+    let installation = crate::install::inspect(root)?;
+    let update_available = installation
+        .plugin_jars
+        .first()
+        .is_none_or(|path| !path_matches_artifact(Path::new(path), &artifact));
+    Ok((Some(release), update_available))
 }
 
 fn latest_plugin_release_from(
@@ -1264,6 +1297,7 @@ fn status_for_versions(
     installation_ready: bool,
     revoked: bool,
     launcher_old: bool,
+    body_update_available: bool,
     launcher_update_available: bool,
 ) -> Result<&'static str, UpdateError> {
     let version_order = compare_versions(installed, available);
@@ -1281,7 +1315,7 @@ fn status_for_versions(
         }
         return Ok("install_required");
     }
-    Ok(if version_order == Ordering::Less {
+    Ok(if body_update_available {
         "available"
     } else if launcher_update_available {
         "launcher_available"
@@ -1300,7 +1334,24 @@ fn bootstrap_allowed_for_versions(
     revoked || (!installation_ready && compare_versions(installed, available) != Ordering::Greater)
 }
 
+#[cfg(test)]
 fn update_info_from_release(
+    installed: String,
+    installation_ready: bool,
+    launcher_version: &str,
+    release: &ReleaseManifest,
+) -> Result<UpdateInfo, UpdateError> {
+    update_info_from_release_at_root(
+        Path::new("."),
+        installed,
+        installation_ready,
+        launcher_version,
+        release,
+    )
+}
+
+fn update_info_from_release_at_root(
+    root: &Path,
     installed: String,
     installation_ready: bool,
     launcher_version: &str,
@@ -1309,21 +1360,46 @@ fn update_info_from_release(
     let launcher_release = (!release.launcher_version.trim().is_empty()
         && release_contains_launcher(release))
     .then_some(release);
-    update_info_from_releases(
+    let (required_plugin, plugin_update_available) = required_plugin_policy(root, release)?;
+    update_info_from_releases_with_plugin(
         installed,
         installation_ready,
         launcher_version,
         release,
         launcher_release,
+        required_plugin,
+        plugin_update_available,
     )
 }
 
+#[cfg(test)]
 fn update_info_from_releases(
     installed: String,
     installation_ready: bool,
     launcher_version: &str,
     release: &ReleaseManifest,
     launcher_release: Option<&ReleaseManifest>,
+) -> Result<UpdateInfo, UpdateError> {
+    update_info_from_releases_with_plugin(
+        installed,
+        installation_ready,
+        launcher_version,
+        release,
+        launcher_release,
+        None,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn update_info_from_releases_with_plugin(
+    installed: String,
+    installation_ready: bool,
+    launcher_version: &str,
+    release: &ReleaseManifest,
+    launcher_release: Option<&ReleaseManifest>,
+    required_plugin: Option<PluginRelease>,
+    plugin_update_available: bool,
 ) -> Result<UpdateInfo, UpdateError> {
     if !installation_ready && !bootstrap_artifacts_present(release) {
         return Err(UpdateError::IncompleteBootstrap);
@@ -1343,13 +1419,15 @@ fn update_info_from_releases(
         && compare_versions(launcher_version, &available_launcher_version) == Ordering::Less;
     let body_update_available = !installation_ready
         || revoked
-        || compare_versions(&installed, &release.version) == Ordering::Less;
+        || (release_contains_body_update(release)
+            && compare_versions(&installed, &release.version) == Ordering::Less);
     let status = status_for_versions(
         &installed,
         &release.version,
         installation_ready,
         revoked,
         launcher_old,
+        body_update_available,
         launcher_update_available,
     )?;
     let release_notes_markdown_ja = if release.release_notes_markdown_ja.is_empty() {
@@ -1371,6 +1449,9 @@ fn update_info_from_releases(
         available_launcher_version,
         body_update_available,
         launcher_update_available,
+        plugin_update_available,
+        plugin_mandatory: release.plugin_mandatory,
+        required_plugin,
         available_published_at: release.published_at.clone(),
         status: status.to_string(),
         mandatory: release.mandatory || revoked || launcher_old,
@@ -1386,6 +1467,7 @@ fn update_blocks_launch(update: &UpdateInfo) -> bool {
         update.status.as_str(),
         "install_required" | "revoked" | "launcher_too_old"
     ) || (update.mandatory && (update.body_update_available || update.launcher_update_available))
+        || (update.plugin_mandatory && update.plugin_update_available)
 }
 
 fn cache_verified_release(root: &Path, manifest_json: &str) -> Result<(), UpdateError> {
@@ -1427,7 +1509,8 @@ fn cached_update_from(
     if release.channel != selected_channel || release.platform != selected_platform {
         return Ok(None);
     }
-    update_info_from_release(
+    update_info_from_release_at_root(
+        root,
         installed_version(root),
         installation_ready,
         launcher_version,
@@ -1484,12 +1567,15 @@ pub fn check_installation(
         &input,
         &release,
     )?;
-    let update = update_info_from_releases(
+    let (required_plugin, plugin_update_available) = required_plugin_policy(root, &release)?;
+    let update = update_info_from_releases_with_plugin(
         installed,
         installation_ready,
         env!("CARGO_PKG_VERSION"),
         &release,
         launcher_release.as_ref().map(|(_, manifest)| manifest),
+        required_plugin,
+        plugin_update_available,
     )?;
     cache_verified_release(root, &input)?;
     Ok(update)
@@ -1769,7 +1855,8 @@ where
     });
     let body_update_available = !installation_ready
         || revoked
-        || compare_versions(&installed, &release.version) == Ordering::Less;
+        || (release_contains_body_update(&release)
+            && compare_versions(&installed, &release.version) == Ordering::Less);
     let target_available = match target {
         UpdateTarget::All => body_update_available || launcher_update_available,
         UpdateTarget::Body => body_update_available,
@@ -2085,7 +2172,7 @@ mod tests {
     #[test]
     fn missing_installation_can_bootstrap_the_same_version() {
         assert_eq!(
-            status_for_versions("0.4.14", "0.4.14", false, false, false, false).unwrap(),
+            status_for_versions("0.4.14", "0.4.14", false, false, false, true, false,).unwrap(),
             "install_required"
         );
         assert!(bootstrap_allowed_for_versions(
@@ -2112,6 +2199,7 @@ mod tests {
             release_notes_markdown_en: String::new(),
             announcements: vec![],
             mandatory: false,
+            plugin_mandatory: false,
             minimum_launcher_version: "0.2.1".into(),
             launcher_version: String::new(),
             revoked_versions: vec![],
@@ -2148,6 +2236,7 @@ mod tests {
             release_notes_markdown_en: String::new(),
             announcements: vec![],
             mandatory: false,
+            plugin_mandatory: false,
             minimum_launcher_version: "0.2.1".into(),
             launcher_version: String::new(),
             revoked_versions: vec![],
@@ -2183,6 +2272,7 @@ mod tests {
             release_notes_markdown_en: String::new(),
             announcements: vec![],
             mandatory: false,
+            plugin_mandatory: false,
             minimum_launcher_version: "0.2.17".into(),
             launcher_version: "0.2.20".into(),
             revoked_versions: vec![],
@@ -2220,7 +2310,7 @@ mod tests {
     #[test]
     fn complete_installation_keeps_normal_version_rules() {
         assert_eq!(
-            status_for_versions("0.4.14", "0.4.14", true, false, false, false).unwrap(),
+            status_for_versions("0.4.14", "0.4.14", true, false, false, false, false,).unwrap(),
             "current"
         );
         assert!(!bootstrap_allowed_for_versions(
@@ -2230,7 +2320,9 @@ mod tests {
 
     #[test]
     fn incomplete_newer_installation_does_not_silently_downgrade() {
-        assert!(status_for_versions("0.4.15", "0.4.14", false, false, false, false).is_err());
+        assert!(
+            status_for_versions("0.4.15", "0.4.14", false, false, false, true, false,).is_err()
+        );
         assert!(!bootstrap_allowed_for_versions(
             "0.4.15", "0.4.14", false, false
         ));
@@ -2256,7 +2348,12 @@ mod tests {
             "mandatory": true,
             "minimum_launcher_version": "0.2.0",
             "revoked_versions": [],
-            "artifacts": []
+            "artifacts": [{
+                "path": "required.dat",
+                "sha256": "00".repeat(32),
+                "size": 0,
+                "executable": false
+            }]
         });
         let signature = signing.sign(&serde_jcs::to_vec(&manifest).unwrap());
         manifest["signature"] = Value::String(STANDARD.encode(signature.to_bytes()));
@@ -2317,6 +2414,7 @@ mod tests {
             release_notes_markdown_en: String::new(),
             announcements: vec![],
             mandatory: false,
+            plugin_mandatory: false,
             minimum_launcher_version: "0.2.0".into(),
             launcher_version: String::new(),
             revoked_versions: vec![],
@@ -2327,6 +2425,63 @@ mod tests {
         let update = update_info_from_release("0.4.13".into(), true, "0.2.3", &release).unwrap();
         assert_eq!(update.release_notes_markdown_ja, "Legacy notes");
         assert_eq!(update.release_notes_markdown_en, "Legacy notes");
+    }
+
+    #[test]
+    fn cached_signed_plugin_mandatory_blocks_only_until_plugin_bytes_match() {
+        let signing = SigningKey::from_bytes(&[24_u8; 32]);
+        let required_bytes = b"required-plugin";
+        let required_path = "ir/bms_ir_arena_0.0.73.jar";
+        let mut manifest = json!({
+            "schema_version": 1,
+            "channel": "test",
+            "platform": "windows-x64",
+            "version": "0.4.14.54",
+            "published_at": "2026-08-18T00:00:00Z",
+            "release_notes_markdown": "",
+            "mandatory": false,
+            "plugin_mandatory": true,
+            "minimum_launcher_version": "0.2.27",
+            "revoked_versions": [],
+            "artifacts": [{
+                "path": required_path,
+                "sha256": format!("{:x}", Sha256::digest(required_bytes)),
+                "size": required_bytes.len(),
+                "executable": false
+            }]
+        });
+        let signature = signing.sign(&serde_jcs::to_vec(&manifest).unwrap());
+        manifest["signature"] = Value::String(STANDARD.encode(signature.to_bytes()));
+
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("ir")).unwrap();
+        let old_path = root.path().join("ir/bms_ir_arena_0.0.72.jar");
+        fs::write(&old_path, b"old-plugin").unwrap();
+        fs::write(root.path().join(VERSION_FILE), "0.4.14.53\n").unwrap();
+        cache_verified_release(root.path(), &serde_json::to_string(&manifest).unwrap()).unwrap();
+        let key = STANDARD.encode(signing.verifying_key().to_bytes());
+
+        let blocked = cached_update_from(root.path(), true, &key, "test", "windows-x64", "0.2.27")
+            .unwrap()
+            .unwrap();
+        assert!(!blocked.body_update_available);
+        assert!(blocked.plugin_update_available);
+        assert!(blocked.plugin_mandatory);
+        assert_eq!(
+            blocked.required_plugin.as_ref().unwrap().version,
+            "0.4.14.54"
+        );
+        assert!(update_blocks_launch(&blocked));
+
+        fs::remove_file(old_path).unwrap();
+        fs::write(root.path().join(required_path), required_bytes).unwrap();
+        let current = cached_update_from(root.path(), true, &key, "test", "windows-x64", "0.2.27")
+            .unwrap()
+            .unwrap();
+        assert!(!current.body_update_available);
+        assert!(!current.plugin_update_available);
+        assert!(!update_blocks_launch(&current));
+        assert_eq!(current.status, "current");
     }
 
     #[test]
@@ -2934,6 +3089,7 @@ mod tests {
                 release_notes_markdown_en: String::new(),
                 announcements: vec![],
                 mandatory: false,
+                plugin_mandatory: false,
                 minimum_launcher_version: "0.2.20".into(),
                 launcher_version: String::new(),
                 revoked_versions: vec![],
@@ -3041,6 +3197,7 @@ mod tests {
             release_notes_markdown_en: String::new(),
             announcements: vec![],
             mandatory: false,
+            plugin_mandatory: false,
             minimum_launcher_version: "0.2.20".into(),
             launcher_version: String::new(),
             revoked_versions: vec![],
@@ -4086,6 +4243,7 @@ mod tests {
             release_notes_markdown_en: String::new(),
             announcements: vec![],
             mandatory: false,
+            plugin_mandatory: false,
             minimum_launcher_version: "0.2.0".into(),
             launcher_version: String::new(),
             revoked_versions: vec![],
