@@ -716,23 +716,38 @@ pub fn write_version_marker(root: &Path, version: &str) -> Result<(), InstallErr
     Ok(())
 }
 
-fn game_arguments(root: &Path, game_jar: &Path, configuration: bool) -> Vec<OsString> {
-    let mut arguments = vec![
-        OsString::from(format!(
-            "-DcustomIRDirectory={}",
-            root.join("ir").to_string_lossy()
-        )),
+fn game_arguments_for_platform(
+    root: &Path,
+    game_jar: &Path,
+    configuration: bool,
+    windows_native_audio: bool,
+) -> Vec<OsString> {
+    let mut arguments = vec![OsString::from(format!(
+        "-DcustomIRDirectory={}",
+        root.join("ir").to_string_lossy()
+    ))];
+    if windows_native_audio {
+        arguments.push(OsString::from(format!(
+            "-Djava.library.path={}",
+            root.join("natives").to_string_lossy()
+        )));
+    }
+    arguments.extend([
         OsString::from("-Xms1g"),
         OsString::from("-Xmx4g"),
         OsString::from("-jar"),
         game_jar.as_os_str().to_os_string(),
-    ];
+    ]);
     if configuration {
         arguments.push(OsString::from("-c"));
     } else {
         arguments.push(OsString::from("-s"));
     }
     arguments
+}
+
+fn game_arguments(root: &Path, game_jar: &Path, configuration: bool) -> Vec<OsString> {
+    game_arguments_for_platform(root, game_jar, configuration, cfg!(windows))
 }
 
 fn launch_mode(configuration: bool) -> &'static str {
@@ -1197,8 +1212,12 @@ mod tests {
 
     #[test]
     fn portable_launch_keeps_bat_memory_and_plugin_arguments() {
-        let arguments =
-            game_arguments(Path::new("arena root"), Path::new(CANONICAL_GAME_JAR), true);
+        let arguments = game_arguments_for_platform(
+            Path::new("arena root"),
+            Path::new(CANONICAL_GAME_JAR),
+            true,
+            false,
+        );
         assert_eq!(
             arguments[0],
             OsString::from(format!(
@@ -1215,13 +1234,34 @@ mod tests {
 
     #[test]
     fn normal_launch_enters_music_select_directly() {
-        let arguments = game_arguments(
+        let arguments = game_arguments_for_platform(
             Path::new("arena root"),
             Path::new(CANONICAL_GAME_JAR),
+            false,
             false,
         );
         assert_eq!(arguments[4], CANONICAL_GAME_JAR);
         assert_eq!(arguments[5], "-s");
+    }
+
+    #[test]
+    fn windows_launch_uses_the_portable_native_audio_directory() {
+        let root = Path::new("C:/Arena oraja/日本語");
+        let arguments =
+            game_arguments_for_platform(root, &root.join(CANONICAL_GAME_JAR), true, true);
+        assert_eq!(
+            arguments[0],
+            OsString::from("-DcustomIRDirectory=C:/Arena oraja/日本語/ir")
+        );
+        assert_eq!(
+            arguments[1],
+            OsString::from("-Djava.library.path=C:/Arena oraja/日本語/natives")
+        );
+        assert_eq!(arguments[2], "-Xms1g");
+        assert_eq!(arguments[3], "-Xmx4g");
+        assert_eq!(arguments[4], "-jar");
+        assert_eq!(arguments[5], root.join(CANONICAL_GAME_JAR).as_os_str());
+        assert_eq!(arguments[6], "-c");
     }
 
     #[test]

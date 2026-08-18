@@ -24,6 +24,12 @@ The dedicated game body is `Arena-oraja.jar`. Existing `beatoraja.jar` and
 versioned Arena oraja JARs remain launchable only as compatibility fallbacks;
 the updater never deletes or overwrites a user's ordinary `beatoraja.jar`.
 
+Launcher 0.2.28 adds the portable root's `natives/` directory to the JVM
+native-library path on Windows for both normal play and pre-launch
+configuration. The path is passed as one process argument, preserving spaces,
+Unicode, and supported long Windows paths. macOS launch arguments are
+unchanged.
+
 The header always identifies the installed body version, selected update
 channel, and launcher version separately. During an installation or update,
 the status band shows byte-accurate overall progress, transferred and total
