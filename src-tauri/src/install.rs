@@ -1251,11 +1251,17 @@ mod tests {
             game_arguments_for_platform(root, &root.join(CANONICAL_GAME_JAR), true, true);
         assert_eq!(
             arguments[0],
-            OsString::from("-DcustomIRDirectory=C:/Arena oraja/日本語/ir")
+            OsString::from(format!(
+                "-DcustomIRDirectory={}",
+                root.join("ir").to_string_lossy()
+            ))
         );
         assert_eq!(
             arguments[1],
-            OsString::from("-Djava.library.path=C:/Arena oraja/日本語/natives")
+            OsString::from(format!(
+                "-Djava.library.path={}",
+                root.join("natives").to_string_lossy()
+            ))
         );
         assert_eq!(arguments[2], "-Xms1g");
         assert_eq!(arguments[3], "-Xmx4g");
