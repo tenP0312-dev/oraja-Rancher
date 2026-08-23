@@ -20,8 +20,7 @@ const VERSION_FILE: &str = "bmsir-arena-version.txt";
 const STAGING_DIRECTORY: &str = ".bmsir-update-staging";
 const STAGED_MANIFEST: &str = ".bmsir-update-manifest.json";
 const STAGED_LAUNCHER_MANIFEST: &str = ".bmsir-launcher-manifest.json";
-const CACHED_POLICY: &str = ".bmsir-launcher-policy.json";
-const CACHED_POLICY_TEMPORARY: &str = ".bmsir-launcher-policy.tmp";
+const LEGACY_CACHED_POLICY: &str = ".bmsir-launcher-policy.json";
 const BOOTSTRAP_ARCHIVE: &str = ".bmsir-bootstrap.zip";
 const DOWNLOAD_ATTEMPTS: usize = 4;
 const PROGRESS_BYTES_STEP: u64 = 1024 * 1024;
@@ -35,7 +34,9 @@ const fn configured_value(value: Option<&str>) -> bool {
 pub const CONFIGURATION_MARKER: &str =
     if configured_value(option_env!("BMSIR_ARENA_UPDATE_BASE_URL"))
         && configured_value(option_env!("BMSIR_ARENA_UPDATE_CHANNEL"))
-        && configured_value(option_env!("BMSIR_ARENA_RELEASE_PUBLIC_KEY"))
+        && (configured_value(option_env!("BMSIR_ARENA_RELEASE_PUBLIC_KEY"))
+            || configured_value(option_env!("BMSIR_ARENA_STABLE_RELEASE_PUBLIC_KEY"))
+            || configured_value(option_env!("BMSIR_ARENA_TEST_RELEASE_PUBLIC_KEY")))
     {
         "BMSIR_ARENA_UPDATE_CONFIGURED_V1"
     } else {
@@ -52,6 +53,10 @@ pub enum UpdateError {
     Url,
     #[error("update request failed: {0}")]
     Request(String),
+    #[error("the selected release channel has no published release")]
+    NoRelease,
+    #[error("the requested update resource was not found")]
+    NotFound,
     #[error("update response is too large")]
     TooLarge,
     #[error("update response is incomplete")]
@@ -175,7 +180,7 @@ impl UpdateProgress {
     }
 }
 
-pub fn channel() -> String {
+pub fn default_channel() -> String {
     std::env::current_exe()
         .ok()
         .map(|path| {
@@ -257,10 +262,29 @@ fn update_base_url() -> Result<&'static str, UpdateError> {
         .ok_or(UpdateError::Endpoint)
 }
 
-fn release_public_key() -> Result<&'static str, UpdateError> {
-    option_env!("BMSIR_ARENA_RELEASE_PUBLIC_KEY")
-        .filter(|value| !value.trim().is_empty())
+fn configured_public_key(value: Option<&'static str>) -> Option<&'static str> {
+    value.filter(|value| !value.trim().is_empty())
+}
+
+fn release_public_key(selected_channel: &str) -> Result<&'static str, UpdateError> {
+    let channel_key = match selected_channel {
+        "stable" => configured_public_key(option_env!("BMSIR_ARENA_STABLE_RELEASE_PUBLIC_KEY")),
+        "test" => configured_public_key(option_env!("BMSIR_ARENA_TEST_RELEASE_PUBLIC_KEY")),
+        _ => return Err(UpdateError::WrongTarget),
+    };
+    channel_key
+        .or_else(|| configured_public_key(option_env!("BMSIR_ARENA_RELEASE_PUBLIC_KEY")))
         .ok_or(UpdateError::PublicKey)
+}
+
+pub(crate) fn verify_configured_manifest(input: &str) -> Result<ReleaseManifest, UpdateError> {
+    let value: serde_json::Value =
+        serde_json::from_str(input).map_err(crate::manifest::ManifestError::from)?;
+    let selected_channel = value
+        .get("channel")
+        .and_then(|value| value.as_str())
+        .ok_or(UpdateError::WrongTarget)?;
+    verify_manifest(input, release_public_key(selected_channel)?).map_err(Into::into)
 }
 
 fn append_url(base: &str, segments: &[&str]) -> Result<Url, UpdateError> {
@@ -292,6 +316,7 @@ fn fetch_response(url: &Url) -> Result<ureq::Response, UpdateError> {
     for attempt in 0..DOWNLOAD_ATTEMPTS {
         match agent.get(url.as_str()).call() {
             Ok(response) => return Ok(response),
+            Err(ureq::Error::Status(404, _)) => return Err(UpdateError::NotFound),
             Err(error) => {
                 let retryable = matches!(
                     error,
@@ -338,7 +363,10 @@ fn fetch_release_from(
             "manifest.json",
         ],
     )?;
-    let bytes = fetch_bytes(&url, MAX_MANIFEST_BYTES)?;
+    let bytes = match fetch_bytes(&url, MAX_MANIFEST_BYTES) {
+        Err(UpdateError::NotFound) => return Err(UpdateError::NoRelease),
+        result => result?,
+    };
     let input = String::from_utf8(bytes).map_err(|_| UpdateError::Incomplete)?;
     let release = verify_manifest(&input, public_key)?;
     if release.channel != selected_channel || release.platform != selected_platform {
@@ -442,11 +470,14 @@ fn artifact_download_url(
 /// but not yet installed) — without also excluding it, the very release
 /// being offered as "the update" would confusingly also appear as
 /// "deprecated".
-pub fn list_deprecated_versions(current_version: &str) -> Result<Vec<HistoryEntry>, UpdateError> {
+pub fn list_deprecated_versions(
+    selected_channel: &str,
+    current_version: &str,
+) -> Result<Vec<HistoryEntry>, UpdateError> {
     list_deprecated_versions_from(
         update_base_url()?,
-        release_public_key()?,
-        &channel(),
+        release_public_key(selected_channel)?,
+        selected_channel,
         platform(),
         current_version,
     )
@@ -494,11 +525,14 @@ pub struct VersionNotes {
 /// Fetches and verifies one historical release's notes on demand. Historical
 /// manifests remain the signed source of truth; the WebView never fetches or
 /// trusts release text directly.
-pub fn fetch_version_notes(version: &str) -> Result<VersionNotes, UpdateError> {
+pub fn fetch_version_notes(
+    selected_channel: &str,
+    version: &str,
+) -> Result<VersionNotes, UpdateError> {
     fetch_version_notes_from(
         update_base_url()?,
-        release_public_key()?,
-        &channel(),
+        release_public_key(selected_channel)?,
+        selected_channel,
         platform(),
         version,
     )
@@ -896,11 +930,13 @@ fn latest_launcher_release_from_history(
     Ok(latest)
 }
 
-pub fn list_deprecated_plugin_versions() -> Result<Vec<PluginRelease>, UpdateError> {
+pub fn list_deprecated_plugin_versions(
+    selected_channel: &str,
+) -> Result<Vec<PluginRelease>, UpdateError> {
     list_deprecated_plugin_versions_from(
         update_base_url()?,
-        release_public_key()?,
-        &channel(),
+        release_public_key(selected_channel)?,
+        selected_channel,
         platform(),
     )
 }
@@ -945,11 +981,11 @@ fn list_deprecated_plugin_versions_from(
     Ok(result)
 }
 
-pub fn plugin_status(root: &Path) -> Result<PluginStatus, UpdateError> {
+pub fn plugin_status(root: &Path, selected_channel: &str) -> Result<PluginStatus, UpdateError> {
     plugin_status_from(
         update_base_url()?,
-        release_public_key()?,
-        &channel(),
+        release_public_key(selected_channel)?,
+        selected_channel,
         platform(),
         root,
     )
@@ -979,6 +1015,7 @@ fn plugin_status_from(
 
 pub fn install_plugin_version<F>(
     root: &Path,
+    selected_channel: &str,
     version: &str,
     launcher_version: &str,
     progress: F,
@@ -988,8 +1025,8 @@ where
 {
     install_plugin_version_from(
         update_base_url()?,
-        release_public_key()?,
-        &channel(),
+        release_public_key(selected_channel)?,
+        selected_channel,
         platform(),
         root,
         version,
@@ -1096,6 +1133,7 @@ where
 /// downgrade never has to guess about anything beyond the JAR itself.
 pub fn downgrade_to_version<F>(
     root: &Path,
+    selected_channel: &str,
     target_version: &str,
     launcher_version: &str,
     progress: F,
@@ -1105,8 +1143,8 @@ where
 {
     downgrade_to_version_from(
         update_base_url()?,
-        release_public_key()?,
-        &channel(),
+        release_public_key(selected_channel)?,
+        selected_channel,
         platform(),
         root,
         target_version,
@@ -1470,9 +1508,34 @@ fn update_blocks_launch(update: &UpdateInfo) -> bool {
         || (update.plugin_mandatory && update.plugin_update_available)
 }
 
-fn cache_verified_release(root: &Path, manifest_json: &str) -> Result<(), UpdateError> {
-    let target = root.join(CACHED_POLICY);
-    let temporary = root.join(CACHED_POLICY_TEMPORARY);
+fn cached_policy_path(root: &Path, selected_channel: &str) -> Result<PathBuf, UpdateError> {
+    match selected_channel {
+        "stable" | "test" => {
+            Ok(root.join(format!(".bmsir-launcher-policy-{selected_channel}.json")))
+        }
+        _ => Err(UpdateError::WrongTarget),
+    }
+}
+
+fn cached_policy_temporary_path(
+    root: &Path,
+    selected_channel: &str,
+) -> Result<PathBuf, UpdateError> {
+    match selected_channel {
+        "stable" | "test" => {
+            Ok(root.join(format!(".bmsir-launcher-policy-{selected_channel}.tmp")))
+        }
+        _ => Err(UpdateError::WrongTarget),
+    }
+}
+
+fn cache_verified_release(
+    root: &Path,
+    selected_channel: &str,
+    manifest_json: &str,
+) -> Result<(), UpdateError> {
+    let target = cached_policy_path(root, selected_channel)?;
+    let temporary = cached_policy_temporary_path(root, selected_channel)?;
     for path in [&target, &temporary] {
         if path.exists() && path.symlink_metadata()?.file_type().is_symlink() {
             return Err(UpdateError::UnsafeStaging);
@@ -1494,10 +1557,15 @@ fn cached_update_from(
     selected_platform: &str,
     launcher_version: &str,
 ) -> Result<Option<UpdateInfo>, UpdateError> {
-    let path = root.join(CACHED_POLICY);
-    if !path.exists() {
+    let channel_path = cached_policy_path(root, selected_channel)?;
+    let legacy_path = root.join(LEGACY_CACHED_POLICY);
+    let path = if channel_path.exists() {
+        channel_path
+    } else if selected_channel == default_channel() && legacy_path.exists() {
+        legacy_path
+    } else {
         return Ok(None);
-    }
+    };
     if path.symlink_metadata()?.file_type().is_symlink() {
         return Err(UpdateError::UnsafeStaging);
     }
@@ -1522,15 +1590,16 @@ fn cached_update_from(
 pub fn cached_update(
     root: &Path,
     installation_ready: bool,
+    selected_channel: &str,
 ) -> Result<Option<UpdateInfo>, UpdateError> {
-    let Ok(public_key) = release_public_key() else {
+    let Ok(public_key) = release_public_key(selected_channel) else {
         return Ok(None);
     };
     cached_update_from(
         root,
         installation_ready,
         public_key,
-        &channel(),
+        selected_channel,
         platform(),
         env!("CARGO_PKG_VERSION"),
     )
@@ -1539,8 +1608,9 @@ pub fn cached_update(
 pub fn enforce_cached_launch_policy(
     root: &Path,
     installation_ready: bool,
+    selected_channel: &str,
 ) -> Result<(), UpdateError> {
-    if let Some(update) = cached_update(root, installation_ready)? {
+    if let Some(update) = cached_update(root, installation_ready, selected_channel)? {
         if update_blocks_launch(&update) {
             return Err(UpdateError::RequiredUpdate(update.available_version));
         }
@@ -1551,18 +1621,18 @@ pub fn enforce_cached_launch_policy(
 pub fn check_installation(
     root: &Path,
     installation_ready: bool,
+    selected_channel: &str,
 ) -> Result<UpdateInfo, UpdateError> {
     let installed = installed_version(root);
-    let selected_channel = channel();
     let selected_platform = platform();
     let base_url = update_base_url()?;
-    let public_key = release_public_key()?;
+    let public_key = release_public_key(selected_channel)?;
     let (input, release) =
-        fetch_release_from(base_url, public_key, &selected_channel, selected_platform)?;
+        fetch_release_from(base_url, public_key, selected_channel, selected_platform)?;
     let (launcher_release, _history) = latest_launcher_and_history_from(
         base_url,
         public_key,
-        &selected_channel,
+        selected_channel,
         selected_platform,
         &input,
         &release,
@@ -1577,7 +1647,7 @@ pub fn check_installation(
         required_plugin,
         plugin_update_available,
     )?;
-    cache_verified_release(root, &input)?;
+    cache_verified_release(root, selected_channel, &input)?;
     Ok(update)
 }
 
@@ -1795,19 +1865,19 @@ where
 pub fn prepare_with_progress<F>(
     root: &Path,
     installation_ready: bool,
+    selected_channel: &str,
     target: UpdateTarget,
     progress: F,
 ) -> Result<PreparedUpdate, UpdateError>
 where
     F: FnMut(UpdateProgress),
 {
-    let selected_channel = channel();
     prepare_from_with_progress(
         root,
         installation_ready,
         update_base_url()?,
-        release_public_key()?,
-        &selected_channel,
+        release_public_key(selected_channel)?,
+        selected_channel,
         platform(),
         target,
         progress,
@@ -2139,6 +2209,38 @@ mod tests {
     }
 
     #[test]
+    fn missing_current_manifest_is_an_empty_release_channel() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 4096];
+            let length = stream.read(&mut request).unwrap();
+            let line = String::from_utf8_lossy(&request[..length]);
+            assert_eq!(
+                line.lines()
+                    .next()
+                    .and_then(|value| value.split_whitespace().nth(1)),
+                Some("/channels/stable/windows-x64/manifest.json")
+            );
+            write!(
+                stream,
+                "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            )
+            .unwrap();
+        });
+
+        let result = fetch_release_from(
+            &format!("http://{address}"),
+            "unused-for-an-empty-channel",
+            "stable",
+            "windows-x64",
+        );
+        server.join().unwrap();
+        assert!(matches!(result, Err(UpdateError::NoRelease)));
+    }
+
+    #[test]
     fn macos_app_name_selects_channel_instead_of_inner_binary_name() {
         assert_eq!(
             channel_from_executable_path(Path::new(
@@ -2360,7 +2462,12 @@ mod tests {
 
         let root = tempfile::tempdir().unwrap();
         fs::write(root.path().join(VERSION_FILE), "0.4.13\n").unwrap();
-        cache_verified_release(root.path(), &serde_json::to_string(&manifest).unwrap()).unwrap();
+        cache_verified_release(
+            root.path(),
+            "test",
+            &serde_json::to_string(&manifest).unwrap(),
+        )
+        .unwrap();
         let update = cached_update_from(
             root.path(),
             true,
@@ -2389,7 +2496,7 @@ mod tests {
         assert_eq!(current.status, "current");
         assert!(!update_blocks_launch(&current));
 
-        fs::write(root.path().join(CACHED_POLICY), "{}\n").unwrap();
+        fs::write(cached_policy_path(root.path(), "test").unwrap(), "{}\n").unwrap();
         assert!(cached_update_from(
             root.path(),
             true,
@@ -2399,6 +2506,25 @@ mod tests {
             "0.2.3",
         )
         .is_err());
+    }
+
+    #[test]
+    fn channel_specific_cache_does_not_leak_into_another_channel() {
+        let root = tempfile::tempdir().unwrap();
+        cache_verified_release(root.path(), "test", "{}\n").unwrap();
+
+        assert!(cached_policy_path(root.path(), "test").unwrap().exists());
+        assert!(!cached_policy_path(root.path(), "stable").unwrap().exists());
+        assert!(cached_update_from(
+            root.path(),
+            true,
+            "unused-because-stable-has-no-cache",
+            "stable",
+            "windows-x64",
+            "0.2.29",
+        )
+        .unwrap()
+        .is_none());
     }
 
     #[test]
@@ -2458,7 +2584,12 @@ mod tests {
         let old_path = root.path().join("ir/bms_ir_arena_0.0.72.jar");
         fs::write(&old_path, b"old-plugin").unwrap();
         fs::write(root.path().join(VERSION_FILE), "0.4.14.53\n").unwrap();
-        cache_verified_release(root.path(), &serde_json::to_string(&manifest).unwrap()).unwrap();
+        cache_verified_release(
+            root.path(),
+            "test",
+            &serde_json::to_string(&manifest).unwrap(),
+        )
+        .unwrap();
         let key = STANDARD.encode(signing.verifying_key().to_bytes());
 
         let blocked = cached_update_from(root.path(), true, &key, "test", "windows-x64", "0.2.27")

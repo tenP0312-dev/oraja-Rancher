@@ -20,6 +20,24 @@ header {
   gap: 16px;
 }
 header > div:first-child p { margin-top: 2px; font-size: 13px; }
+.title-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; }
+.channel-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 3px 9px;
+  border: 1px solid #aab5ad;
+  border-radius: 999px;
+  color: #405048;
+  background: #f6f8f5;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.channel-dot { width: 7px; height: 7px; border-radius: 50%; background: #22834d; }
+.channel-state[data-channel="test"] { border-color: #d8a95d; color: #754700; background: #fff6e7; }
+.channel-state[data-channel="test"] .channel-dot { background: #c27300; }
 .header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 7px; }
 h1 { margin: 0; font-size: 28px; letter-spacing: 0; }
 h2 { margin: 0 0 10px; font-size: 17px; letter-spacing: 0; }
@@ -223,7 +241,8 @@ pre { overflow: auto; white-space: pre-wrap; color: #8b2929; }
 .modal-heading h2 { margin: 0; }
 .modal > .notes { max-height: min(60vh, 470px); margin: 0; padding: 18px; overflow: auto; }
 .settings-list { display: grid; }
-.settings-row { display: flex; align-items: center; justify-content: space-between; gap: 22px; padding: 16px 18px; border-bottom: 1px solid #d9ded9; }
+.settings-row { display: flex; align-items: center; justify-content: space-between; gap: 22px; padding: 16px 18px; border-bottom: 1px solid #d9ded9; cursor: pointer; }
+.settings-row:focus-within { outline: 2px solid #2f7650; outline-offset: -2px; }
 .settings-row span { display: grid; gap: 3px; }
 .settings-row small { color: #657069; }
 .settings-row input { width: 20px; height: 20px; accent-color: #23633f; }

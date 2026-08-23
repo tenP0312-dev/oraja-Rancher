@@ -11,7 +11,13 @@
   <header>
     <div>
       <h1>BMS-IR Arena</h1>
-      <p data-i18n="subtitle">アップデートと起動</p>
+      <div class="title-meta">
+        <p data-i18n="subtitle">アップデートと起動</p>
+        <span id="channel-state" class="channel-state" role="status">
+          <span class="channel-dot" aria-hidden="true"></span>
+          <span id="channel-label">配信: 安定版</span>
+        </span>
+      </div>
     </div>
     <div class="header-actions">
       <button id="resident-state" class="resident-state quiet" type="button" aria-pressed="false">
@@ -123,6 +129,7 @@
     <label class="settings-row"><span><strong data-i18n="settingsResident">常駐（トレイ）</strong><small data-i18n="settingsResidentHint">Arena起動後やウィンドウを閉じた後も常駐します</small></span><input id="setting-resident" type="checkbox"></label>
     <label class="settings-row"><span><strong data-i18n="settingsBackgroundCheck">バックグラウンド更新確認</strong><small data-i18n="settingsBackgroundCheckHint">1日1回確認し、トレイに更新を表示します</small></span><input id="setting-background-check" type="checkbox"></label>
     <label class="settings-row"><span><strong data-i18n="settingsAutostart">ログイン時に起動</strong><small data-i18n="settingsAutostartHint">常駐がONのときに利用できます</small></span><input id="setting-autostart" type="checkbox"></label>
+    <label class="settings-row"><span><strong data-i18n="settingsTestReleases">テスト版の配信を許可</strong><small id="setting-test-releases-hint" data-i18n="settingsTestReleasesHint">安定版より先に配信されるテスト版の更新を受け取ります</small></span><input id="setting-test-releases" type="checkbox" aria-describedby="setting-test-releases-hint"></label>
   </div>
 </dialog>
 

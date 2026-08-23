@@ -30,6 +30,17 @@ configuration. The path is passed as one process argument, preserving spaces,
 Unicode, and supported long Windows paths. macOS launch arguments are
 unchanged.
 
+Launcher 0.2.29 separates stable and test delivery in the existing interface.
+The header shows the selected channel beside the subtitle, and Settings exposes
+an immediately saved `Allow test releases` option. Existing test launchers
+inherit their compiled `test` default until the user changes the setting;
+explicit choices are preserved. Turning the option off selects `stable`, and
+turning it on selects `test`, for body, launcher, plugin, history, downgrade,
+background checks, and cached launch policy together. Each channel has its own
+verified policy cache. If a selected channel has no current manifest, the UI
+shows that it is not yet published while retaining installed component details
+and allowing a valid locally installed body to launch.
+
 The header always identifies the installed body version, selected update
 channel, and launcher version separately. During an installation or update,
 the status band shows byte-accurate overall progress, transferred and total
@@ -37,13 +48,15 @@ size, and verified file count. After transfer it reports the verification,
 application, and launcher-restart phases instead of leaving the window on an
 indeterminate update message.
 
-Configured release builds use their compiled update channel, so downloading or
-renaming a Windows executable cannot redirect it to another channel.
+Configured release builds use their compiled update channel as the initial
+setting for users upgrading from a launcher without an explicit channel
+choice. Renaming a configured Windows executable does not change that default.
 Unconfigured development builds fall back to the executable name: `BMS-IR
-Arena.exe` reads `stable`; `BMS-IR Arena Test.exe` reads `test`, so separate
-folders can coexist. The equivalent macOS app bundle names select the same
-fallback channels. The launcher resolves the maximum declared
-`launcher_version` from the signed history's optional `latest_launcher`
+Arena.exe` defaults to `stable`; `BMS-IR Arena Test.exe` defaults to `test`, so
+separate folders can coexist. The equivalent macOS app bundle names select the
+same fallback defaults. After initialization, the saved Settings option selects
+only the hard-coded `stable` or `test` channel. The launcher resolves the
+maximum declared `launcher_version` from the signed history's optional `latest_launcher`
 pointer and verifies that one selected manifest. Legacy signed history without
 the pointer retains the complete manifest scan. Launcher 0.2.26 also consumes
 the history's optional signed `artifact_locations` reference. The referenced
@@ -148,14 +161,18 @@ the downloaded update immediately.
 The static patch publication tools and manifest layout are maintained in
 `tenP0312-dev/bms-ir-arena-patch-server`. Build variables are:
 
-- `BMSIR_ARENA_RELEASE_PUBLIC_KEY`: raw Ed25519 public key in Base64
+- `BMSIR_ARENA_RELEASE_PUBLIC_KEY`: fallback raw Ed25519 public key in Base64
+- `BMSIR_ARENA_STABLE_RELEASE_PUBLIC_KEY`: optional stable-channel key
+- `BMSIR_ARENA_TEST_RELEASE_PUBLIC_KEY`: optional test-channel key
 - `BMSIR_ARENA_UPDATE_BASE_URL`: HTTPS root containing `channels/`
-- `BMSIR_ARENA_UPDATE_CHANNEL`: fixed `stable` or `test` release channel
+- `BMSIR_ARENA_UPDATE_CHANNEL`: initial `stable` or `test` release channel
 - `BMSIR_ARENA_CLIENT_VERSION`: initial body version when no local marker exists
 
 The release packager accepts only a launcher compiled with the endpoint,
-verification key, and fixed channel. This prevents an offline CI validation
-binary from being renamed and shipped as a working updater.
+at least one verification key, and an initial channel. The launcher chooses the
+channel-specific key when supplied and otherwise uses the fallback key. This
+prevents an offline CI validation binary from being renamed and shipped as a
+working updater.
 
 ## Validation build
 
