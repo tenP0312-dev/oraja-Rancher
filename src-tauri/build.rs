@@ -8,6 +8,8 @@ fn main() {
         "BMSIR_ARENA_UPDATE_BASE_URL",
         "BMSIR_ARENA_UPDATE_CHANNEL",
         "BMSIR_ARENA_RELEASE_PUBLIC_KEY",
+        "BMSIR_ARENA_STABLE_RELEASE_PUBLIC_KEY",
+        "BMSIR_ARENA_TEST_RELEASE_PUBLIC_KEY",
     ] {
         println!("cargo:rerun-if-env-changed={variable}");
         let value = std::env::var(variable).unwrap_or_default();

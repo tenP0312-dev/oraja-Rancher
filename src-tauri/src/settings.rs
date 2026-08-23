@@ -10,6 +10,7 @@ pub struct LauncherSettings {
     pub resident: bool,
     pub autostart: bool,
     pub background_check: bool,
+    pub allow_test_releases: bool,
     pub last_background_check_millis: u64,
     pub last_notified_version: String,
 }
@@ -20,6 +21,7 @@ impl Default for LauncherSettings {
             resident: false,
             autostart: false,
             background_check: false,
+            allow_test_releases: false,
             last_background_check_millis: 0,
             last_notified_version: String::new(),
         }
@@ -30,11 +32,30 @@ fn settings_path(root: &Path) -> PathBuf {
     root.join(SETTINGS_FILE)
 }
 
-pub fn load_settings(root: &Path) -> LauncherSettings {
+pub fn load_settings(root: &Path, default_allow_test_releases: bool) -> LauncherSettings {
     let Ok(text) = fs::read_to_string(settings_path(root)) else {
-        return LauncherSettings::default();
+        return LauncherSettings {
+            allow_test_releases: default_allow_test_releases,
+            ..LauncherSettings::default()
+        };
     };
-    serde_json::from_str(&text).unwrap_or_default()
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return LauncherSettings {
+            allow_test_releases: default_allow_test_releases,
+            ..LauncherSettings::default()
+        };
+    };
+    let inherited_channel = value.get("allow_test_releases").is_none();
+    let Ok(mut settings) = serde_json::from_value::<LauncherSettings>(value) else {
+        return LauncherSettings {
+            allow_test_releases: default_allow_test_releases,
+            ..LauncherSettings::default()
+        };
+    };
+    if inherited_channel {
+        settings.allow_test_releases = default_allow_test_releases;
+    }
+    settings
 }
 
 pub fn save_settings(root: &Path, settings: &LauncherSettings) -> Result<(), std::io::Error> {
@@ -69,7 +90,11 @@ mod tests {
     #[test]
     fn missing_settings_file_loads_opt_in_defaults() {
         let root = tempfile::tempdir().unwrap();
-        assert_eq!(load_settings(root.path()), LauncherSettings::default());
+        assert_eq!(
+            load_settings(root.path(), false),
+            LauncherSettings::default()
+        );
+        assert!(load_settings(root.path(), true).allow_test_releases);
     }
 
     #[test]
@@ -79,19 +104,31 @@ mod tests {
             resident: true,
             autostart: true,
             background_check: true,
+            allow_test_releases: true,
             last_background_check_millis: 1_700_000_000_000,
             last_notified_version: "0.4.14.25/0.2.20".to_string(),
         };
         save_settings(root.path(), &settings).unwrap();
-        assert_eq!(load_settings(root.path()), settings);
+        assert_eq!(load_settings(root.path(), false), settings);
     }
 
     #[test]
-    fn corrupt_or_partial_settings_are_safe() {
+    fn corrupt_or_partial_settings_inherit_the_build_channel() {
         let root = tempfile::tempdir().unwrap();
         fs::write(settings_path(root.path()), "{ not json").unwrap();
-        assert_eq!(load_settings(root.path()), LauncherSettings::default());
+        assert!(load_settings(root.path(), true).allow_test_releases);
         fs::write(settings_path(root.path()), r#"{"resident": true}"#).unwrap();
-        assert!(load_settings(root.path()).resident);
+        let inherited = load_settings(root.path(), true);
+        assert!(inherited.resident);
+        assert!(inherited.allow_test_releases);
+
+        fs::write(
+            settings_path(root.path()),
+            r#"{"resident": true, "allow_test_releases": false}"#,
+        )
+        .unwrap();
+        let explicit = load_settings(root.path(), true);
+        assert!(explicit.resident);
+        assert!(!explicit.allow_test_releases);
     }
 }

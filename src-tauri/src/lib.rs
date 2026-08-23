@@ -33,18 +33,31 @@ struct LauncherState {
     cached_policy_invalid: bool,
 }
 
+fn load_launcher_settings(root: &Path) -> settings::LauncherSettings {
+    settings::load_settings(root, update::default_channel() == "test")
+}
+
+fn selected_update_channel(root: &Path) -> &'static str {
+    if load_launcher_settings(root).allow_test_releases {
+        "test"
+    } else {
+        "stable"
+    }
+}
+
 #[tauri::command]
 fn launcher_state() -> Result<LauncherState, String> {
     let root = install::launcher_install_root().map_err(|error| error.to_string())?;
     let installation = install::inspect(&root).map_err(|error| error.to_string())?;
     let installation_ready = install::is_ready(&installation);
+    let selected_channel = selected_update_channel(&root);
     let (cached_update, cached_policy_invalid) =
-        match update::cached_update(&root, installation_ready) {
+        match update::cached_update(&root, installation_ready, selected_channel) {
             Ok(update) => (update, false),
             Err(_) => (None, true),
         };
     Ok(LauncherState {
-        channel: update::channel(),
+        channel: selected_channel.to_string(),
         platform: update::platform().to_string(),
         installed_version: update::installed_version(&root),
         launcher_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -57,16 +70,21 @@ fn launcher_state() -> Result<LauncherState, String> {
 }
 
 #[tauri::command]
-async fn check_online_update() -> Result<update::UpdateInfo, String> {
+async fn check_online_update() -> Result<Option<update::UpdateInfo>, String> {
     let root = install::launcher_install_root().map_err(|error| error.to_string())?;
     let installation = install::inspect(&root).map_err(|error| error.to_string())?;
     let installation_ready = install::is_ready(&installation);
+    let selected_channel = selected_update_channel(&root).to_string();
     tauri::async_runtime::spawn_blocking(move || {
-        update::check_installation(&root, installation_ready)
+        update::check_installation(&root, installation_ready, &selected_channel)
     })
     .await
     .map_err(|error| error.to_string())?
-    .map_err(|error| error.to_string())
+    .map(Some)
+    .or_else(|error| match error {
+        update::UpdateError::NoRelease => Ok(None),
+        other => Err(other.to_string()),
+    })
 }
 
 #[tauri::command]
@@ -78,12 +96,19 @@ async fn install_online_update(
     let root = install::launcher_install_root().map_err(|error| error.to_string())?;
     let installation = install::inspect(&root).map_err(|error| error.to_string())?;
     let installation_ready = install::is_ready(&installation);
+    let selected_channel = selected_update_channel(&root).to_string();
     let prepare_root = root.clone();
     let progress_app = app.clone();
     let prepared = tauri::async_runtime::spawn_blocking(move || {
-        update::prepare_with_progress(&prepare_root, installation_ready, target, |progress| {
-            let _ = progress_app.emit(UPDATE_PROGRESS_EVENT, progress);
-        })
+        update::prepare_with_progress(
+            &prepare_root,
+            installation_ready,
+            &selected_channel,
+            target,
+            |progress| {
+                let _ = progress_app.emit(UPDATE_PROGRESS_EVENT, progress);
+            },
+        )
     })
     .await
     .map_err(|error| error.to_string())?
@@ -167,29 +192,47 @@ async fn install_online_update(
 async fn list_deprecated_versions() -> Result<Vec<manifest::HistoryEntry>, String> {
     let root = install::launcher_install_root().map_err(|error| error.to_string())?;
     let current_version = update::installed_version(&root);
-    tauri::async_runtime::spawn_blocking(move || update::list_deprecated_versions(&current_version))
-        .await
-        .map_err(|error| error.to_string())?
-        .map_err(|error| error.to_string())
+    let selected_channel = selected_update_channel(&root).to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        update::list_deprecated_versions(&selected_channel, &current_version)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .or_else(|error| match error {
+        update::UpdateError::NoRelease => Ok(Vec::new()),
+        other => Err(other),
+    })
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 async fn fetch_deprecated_version_notes(version: String) -> Result<update::VersionNotes, String> {
-    tauri::async_runtime::spawn_blocking(move || update::fetch_version_notes(&version))
-        .await
-        .map_err(|error| error.to_string())?
-        .map_err(|error| error.to_string())
+    let root = install::launcher_install_root().map_err(|error| error.to_string())?;
+    let selected_channel = selected_update_channel(&root).to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        update::fetch_version_notes(&selected_channel, &version)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 async fn downgrade_to_version(app: AppHandle, version: String) -> Result<String, String> {
     let root = install::launcher_install_root().map_err(|error| error.to_string())?;
     let launcher_version = env!("CARGO_PKG_VERSION").to_string();
+    let selected_channel = selected_update_channel(&root).to_string();
     let progress_app = app.clone();
     let manifest = tauri::async_runtime::spawn_blocking(move || {
-        update::downgrade_to_version(&root, &version, &launcher_version, |progress| {
-            let _ = progress_app.emit(UPDATE_PROGRESS_EVENT, progress);
-        })
+        update::downgrade_to_version(
+            &root,
+            &selected_channel,
+            &version,
+            &launcher_version,
+            |progress| {
+                let _ = progress_app.emit(UPDATE_PROGRESS_EVENT, progress);
+            },
+        )
     })
     .await
     .map_err(|error| error.to_string())?
@@ -200,31 +243,51 @@ async fn downgrade_to_version(app: AppHandle, version: String) -> Result<String,
 }
 
 #[tauri::command]
-async fn check_plugin_update() -> Result<update::PluginStatus, String> {
+async fn check_plugin_update() -> Result<Option<update::PluginStatus>, String> {
     let root = install::launcher_install_root().map_err(|error| error.to_string())?;
-    tauri::async_runtime::spawn_blocking(move || update::plugin_status(&root))
+    let selected_channel = selected_update_channel(&root).to_string();
+    tauri::async_runtime::spawn_blocking(move || update::plugin_status(&root, &selected_channel))
         .await
         .map_err(|error| error.to_string())?
-        .map_err(|error| error.to_string())
+        .map(Some)
+        .or_else(|error| match error {
+            update::UpdateError::NoRelease => Ok(None),
+            other => Err(other.to_string()),
+        })
 }
 
 #[tauri::command]
 async fn list_deprecated_plugin_versions() -> Result<Vec<update::PluginRelease>, String> {
-    tauri::async_runtime::spawn_blocking(update::list_deprecated_plugin_versions)
-        .await
-        .map_err(|error| error.to_string())?
-        .map_err(|error| error.to_string())
+    let root = install::launcher_install_root().map_err(|error| error.to_string())?;
+    let selected_channel = selected_update_channel(&root).to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        update::list_deprecated_plugin_versions(&selected_channel)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .or_else(|error| match error {
+        update::UpdateError::NoRelease => Ok(Vec::new()),
+        other => Err(other),
+    })
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 async fn install_plugin_version(app: AppHandle, version: String) -> Result<String, String> {
     let root = install::launcher_install_root().map_err(|error| error.to_string())?;
     let launcher_version = env!("CARGO_PKG_VERSION").to_owned();
+    let selected_channel = selected_update_channel(&root).to_string();
     let progress_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        update::install_plugin_version(&root, &version, &launcher_version, |progress| {
-            let _ = progress_app.emit(UPDATE_PROGRESS_EVENT, progress);
-        })
+        update::install_plugin_version(
+            &root,
+            &selected_channel,
+            &version,
+            &launcher_version,
+            |progress| {
+                let _ = progress_app.emit(UPDATE_PROGRESS_EVENT, progress);
+            },
+        )
     })
     .await
     .map_err(|error| error.to_string())?
@@ -235,7 +298,7 @@ async fn install_plugin_version(app: AppHandle, version: String) -> Result<Strin
 #[tauri::command]
 fn get_launcher_settings() -> Result<settings::LauncherSettings, String> {
     let root = install::launcher_install_root().map_err(|error| error.to_string())?;
-    Ok(settings::load_settings(&root))
+    Ok(load_launcher_settings(&root))
 }
 
 #[tauri::command]
@@ -247,7 +310,11 @@ fn set_launcher_settings(
         settings.autostart = false;
     }
     let root = install::launcher_install_root().map_err(|error| error.to_string())?;
-    let previous = settings::load_settings(&root);
+    let previous = load_launcher_settings(&root);
+    if previous.allow_test_releases != settings.allow_test_releases {
+        settings.last_background_check_millis = 0;
+        settings.last_notified_version.clear();
+    }
     if previous.autostart != settings.autostart {
         let manager = app.autolaunch();
         let result = if settings.autostart {
@@ -279,7 +346,7 @@ fn run_background_check_once(app: &AppHandle) {
     let Ok(root) = install::launcher_install_root() else {
         return;
     };
-    let mut current = settings::load_settings(&root);
+    let current = load_launcher_settings(&root);
     if !current.background_check {
         return;
     }
@@ -290,10 +357,22 @@ fn run_background_check_once(app: &AppHandle) {
     let Ok(installation) = install::inspect(&root) else {
         return;
     };
-    current.last_background_check_millis = now;
-    if let Ok(info) = update::check_installation(&root, install::is_ready(&installation)) {
+    let selected_channel = if current.allow_test_releases {
+        "test"
+    } else {
+        "stable"
+    };
+    let check =
+        update::check_installation(&root, install::is_ready(&installation), selected_channel);
+    let mut latest = load_launcher_settings(&root);
+    if !latest.background_check || latest.allow_test_releases != current.allow_test_releases {
+        return;
+    }
+    latest.last_background_check_millis = now;
+    if let Ok(info) = check {
         let release_key = format!(
-            "{}/{}/{}",
+            "{}/{}/{}/{}",
+            selected_channel,
             info.available_version,
             info.available_launcher_version,
             info.required_plugin
@@ -304,16 +383,16 @@ fn run_background_check_once(app: &AppHandle) {
         let should_notify = (info.body_update_available
             || info.launcher_update_available
             || info.plugin_update_available)
-            && release_key != current.last_notified_version;
+            && release_key != latest.last_notified_version;
         if should_notify {
             if let Some(tray) = app.tray_by_id("main-tray") {
                 let _ = tray.set_tooltip(Some("BMS-IR Arena の更新があります"));
             }
             let _ = app.emit("arena-background-update-available", info.clone());
-            current.last_notified_version = release_key;
+            latest.last_notified_version = release_key;
         }
     }
-    let _ = settings::save_settings(&root, &current);
+    let _ = settings::save_settings(&root, &latest);
 }
 
 fn show_main_window(app: &AppHandle) {
@@ -375,7 +454,8 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
 fn launch_game(app: AppHandle, configuration: bool) -> Result<install::LaunchInfo, String> {
     let root = install::launcher_install_root().map_err(|error| error.to_string())?;
     let installation = install::inspect(&root).map_err(|error| error.to_string())?;
-    update::enforce_cached_launch_policy(&root, install::is_ready(&installation))
+    let selected_channel = selected_update_channel(&root);
+    update::enforce_cached_launch_policy(&root, install::is_ready(&installation), selected_channel)
         .map_err(|error| error.to_string())?;
     let launch = launch_detected(&app, &root, configuration)?;
     apply_post_launch_behavior(&app, configuration);
@@ -387,7 +467,7 @@ fn apply_post_launch_behavior(app: &AppHandle, configuration: bool) {
         return;
     }
     let resident = install::launcher_install_root()
-        .map(|root| settings::load_settings(&root).resident)
+        .map(|root| load_launcher_settings(&root).resident)
         .unwrap_or(false);
     if resident {
         hide_main_window(app);
@@ -455,7 +535,7 @@ pub fn run() {
             }
             if let WindowEvent::CloseRequested { api, .. } = event {
                 let resident = install::launcher_install_root()
-                    .map(|root| settings::load_settings(&root).resident)
+                    .map(|root| load_launcher_settings(&root).resident)
                     .unwrap_or(false);
                 if resident {
                     api.prevent_close();
@@ -481,16 +561,9 @@ pub fn run() {
         .expect("BMS-IR Arena Launcher failed");
 }
 
-fn release_public_key() -> Result<&'static str, String> {
-    option_env!("BMSIR_ARENA_RELEASE_PUBLIC_KEY")
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| "release verification key is not configured".to_string())
-}
-
 fn load_verified_manifest(manifest_path: &str) -> Result<manifest::ReleaseManifest, String> {
     let manifest_json = fs::read_to_string(manifest_path).map_err(|error| error.to_string())?;
-    manifest::verify_manifest(&manifest_json, release_public_key()?)
-        .map_err(|error| error.to_string())
+    update::verify_configured_manifest(&manifest_json).map_err(|error| error.to_string())
 }
 
 pub fn run_self_update_helper_if_requested() -> bool {

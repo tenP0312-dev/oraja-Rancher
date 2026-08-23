@@ -9,6 +9,10 @@ const dictionary = {
     updatesAvailable: "更新があります",
     unavailable: "更新を確認できませんでした。現在の本体は起動できます",
     unavailableNoInstall: "セットアップファイルを取得できませんでした",
+    channelEmptyStable: "安定版はまだ配信されていません",
+    channelEmptyTest: "テスト版はまだ配信されていません",
+    channelEmptyInstalled: "インストール済みの本体はそのまま起動できます",
+    channelEmptyNoInstall: "この配信にはセットアップできる版がありません",
     invalid: "本体JAR、Java 21以上、またはArenaプラグインを確認できません",
     notInstalled: "本体はまだインストールされていません",
     ready: "本体、Java、Arenaプラグインを確認しました",
@@ -75,7 +79,9 @@ const dictionary = {
     statusRevoked: "利用停止中",
     statusLauncherTooOld: "ランチャー要更新",
     statusUnavailable: "確認できません",
+    statusNoRelease: "未配信",
     pluginCheckUnavailable: "プラグインの更新を確認できません",
+    pluginNoRelease: "この配信にはプラグイン版がありません",
     pluginToggle: "Arenaプラグインの更新・旧版",
     pluginCurrent: "プラグイン更新あり: {version}",
     pluginCurrentOk: "プラグインは最新です",
@@ -83,6 +89,8 @@ const dictionary = {
     pluginDeprecated: "旧プラグイン版",
     pluginReleaseVersion: "プラグイン {plugin} / 本体リリース {release}",
     subtitle: "アップデートと起動",
+    channelStable: "配信: 安定版",
+    channelTest: "配信: テスト版",
     residentOn: "常駐 ON",
     residentOff: "常駐 OFF",
     settingsOpen: "設定",
@@ -94,6 +102,8 @@ const dictionary = {
     settingsBackgroundCheckHint: "1日1回確認し、トレイに更新を表示します",
     settingsAutostart: "ログイン時に起動",
     settingsAutostartHint: "常駐がONのときに利用できます",
+    settingsTestReleases: "テスト版の配信を許可",
+    settingsTestReleasesHint: "安定版より先に配信されるテスト版の更新を受け取ります",
     settingsSaveError: "設定を保存できませんでした",
     deprecatedWarning: "非推奨版はサポート対象外です。本体だけを切り替え、設定やスコアは変更しません。"
   },
@@ -104,6 +114,10 @@ const dictionary = {
     updatesAvailable: "Updates are available",
     unavailable: "Could not check for updates. The installed version can still launch",
     unavailableNoInstall: "Could not download the setup information",
+    channelEmptyStable: "No stable release has been published yet",
+    channelEmptyTest: "No test release has been published yet",
+    channelEmptyInstalled: "The installed game can still be launched",
+    channelEmptyNoInstall: "This channel has no release available for setup",
     invalid: "The game JAR, Java 21+, or Arena plugin could not be found",
     notInstalled: "The game is not installed yet",
     ready: "Game, Java, and Arena plugin are ready",
@@ -170,7 +184,9 @@ const dictionary = {
     statusRevoked: "Revoked",
     statusLauncherTooOld: "Launcher needs updating",
     statusUnavailable: "Unavailable",
+    statusNoRelease: "Not released",
     pluginCheckUnavailable: "Could not check for plugin updates",
+    pluginNoRelease: "This channel has no plugin release",
     pluginToggle: "Arena plugin updates and older versions",
     pluginCurrent: "Plugin update available: {version}",
     pluginCurrentOk: "The plugin is up to date",
@@ -178,6 +194,8 @@ const dictionary = {
     pluginDeprecated: "Older plugin release",
     pluginReleaseVersion: "Plugin {plugin} / body release {release}",
     subtitle: "Updates and launch",
+    channelStable: "Channel: Stable",
+    channelTest: "Channel: Test",
     residentOn: "Resident ON",
     residentOff: "Resident OFF",
     settingsOpen: "Settings",
@@ -189,6 +207,8 @@ const dictionary = {
     settingsBackgroundCheckHint: "Check daily and show updates in the tray",
     settingsAutostart: "Launch at login",
     settingsAutostartHint: "Available while tray residency is enabled",
+    settingsTestReleases: "Allow test releases",
+    settingsTestReleasesHint: "Receive test updates before they are published to the stable channel",
     settingsSaveError: "Could not save settings",
     deprecatedWarning: "Deprecated versions are unsupported. Only the game body changes; settings and scores are preserved."
   }
@@ -199,6 +219,7 @@ let state = null;
 let update = null;
 let checking = true;
 let updateUnavailable = false;
+let channelEmpty = false;
 let installingUpdate = false;
 let updateProgress = null;
 let launching = false;
@@ -237,12 +258,16 @@ function applyLanguage() {
 
 function renderSettings() {
   const resident = Boolean(launcherSettings?.resident);
+  const allowTestReleases = Boolean(launcherSettings?.allow_test_releases);
   byId("resident-label").textContent = tr(resident ? "residentOn" : "residentOff");
   byId("resident-state").setAttribute("aria-pressed", String(resident));
   byId("resident-state").dataset.enabled = String(resident);
+  byId("channel-label").textContent = tr(allowTestReleases ? "channelTest" : "channelStable");
+  byId("channel-state").dataset.channel = allowTestReleases ? "test" : "stable";
   byId("setting-resident").checked = resident;
   byId("setting-background-check").checked = Boolean(launcherSettings?.background_check);
   byId("setting-autostart").checked = Boolean(launcherSettings?.autostart);
+  byId("setting-test-releases").checked = allowTestReleases;
   byId("setting-autostart").disabled = !resident;
 }
 
@@ -250,20 +275,47 @@ async function loadSettings() {
   try {
     launcherSettings = await invoke("get_launcher_settings");
   } catch (error) {
-    launcherSettings = {resident: false, autostart: false, background_check: false};
+    launcherSettings = {
+      resident: false,
+      autostart: false,
+      background_check: false,
+      allow_test_releases: false
+    };
     showError(error);
   }
   renderSettings();
 }
 
+function resetChannelDerivedState() {
+  update = null;
+  pluginStatus = null;
+  pluginVersions = null;
+  pluginVisible = false;
+  pluginUnavailable = false;
+  deprecatedVersions = null;
+  deprecatedVisible = false;
+  deprecatedLoading = false;
+  updateUnavailable = false;
+  channelEmpty = false;
+  checking = true;
+  Object.keys(deprecatedNotesCache).forEach(key => delete deprecatedNotesCache[key]);
+}
+
 async function saveSetting(key, value) {
   if (!launcherSettings) return;
+  const channelChanged = key === "allow_test_releases"
+    && Boolean(launcherSettings.allow_test_releases) !== Boolean(value);
   launcherSettings[key] = value;
   if (key === "resident" && !value) launcherSettings.autostart = false;
   renderSettings();
   try {
     launcherSettings = await invoke("set_launcher_settings", {settings: launcherSettings});
     hideError();
+    if (channelChanged) {
+      resetChannelDerivedState();
+      await loadState();
+      if (state) await checkUpdate();
+    }
   } catch (error) {
     showError(`${tr("settingsSaveError")}\n${error}`);
     await loadSettings();
@@ -285,9 +337,11 @@ function renderPlugins() {
   const pluginUpdate = selectedPluginUpdate();
   byId("plugin-current").textContent = pluginUpdate
     ? tr("pluginCurrent").replace("{version}", pluginVersionLabel(pluginUpdate))
-    : pluginUnavailable
-      ? tr("pluginCheckUnavailable")
-      : tr("pluginCurrentOk");
+    : channelEmpty
+      ? tr("pluginNoRelease")
+      : pluginUnavailable
+        ? tr("pluginCheckUnavailable")
+        : tr("pluginCurrentOk");
   const list = byId("plugin-list");
   list.replaceChildren();
   if (pluginUpdate) {
@@ -345,6 +399,11 @@ function appendPluginRelease(list, entry, deprecated) {
 
 async function togglePlugins() {
   pluginVisible = !pluginVisible;
+  if (pluginVisible && channelEmpty) {
+    pluginVersions = [];
+    renderPlugins();
+    return;
+  }
   if (pluginVisible && pluginVersions === null) {
     try {
       [pluginStatus, pluginVersions] = await Promise.all([
@@ -496,6 +555,11 @@ async function loadDeprecatedNotes(version, container) {
 
 async function toggleDeprecated() {
   deprecatedVisible = !deprecatedVisible;
+  if (deprecatedVisible && channelEmpty) {
+    deprecatedVersions = [];
+    renderDeprecated();
+    return;
+  }
   if (deprecatedVisible && deprecatedVersions === null && !deprecatedLoading) {
     deprecatedLoading = true;
     renderDeprecated();
@@ -660,6 +724,9 @@ function renderStatusCards() {
   if (checking) {
     bodyLine.textContent = installedVersion;
     setBadge(bodyBadge, "neutral", tr("statusChecking"));
+  } else if (channelEmpty) {
+    bodyLine.textContent = installedVersion;
+    setBadge(bodyBadge, "neutral", tr("statusNoRelease"));
   } else if (!bodyUpdate) {
     bodyLine.textContent = installedVersion;
     setBadge(bodyBadge, installed ? "ok" : "warning", installed ? tr("statusUpToDate") : tr("statusSetupNeeded"));
@@ -685,6 +752,8 @@ function renderStatusCards() {
     : installedLauncher;
   if (checking) {
     setBadge(byId("launcher-badge"), "neutral", tr("statusChecking"));
+  } else if (channelEmpty) {
+    setBadge(byId("launcher-badge"), "neutral", tr("statusNoRelease"));
   } else if (launcherUpdate) {
     setBadge(
       byId("launcher-badge"),
@@ -703,6 +772,9 @@ function renderStatusCards() {
   if (checking) {
     byId("plugin-version-line").textContent = installedPlugin;
     setBadge(byId("plugin-badge"), "neutral", tr("statusChecking"));
+  } else if (channelEmpty) {
+    byId("plugin-version-line").textContent = installedPlugin;
+    setBadge(byId("plugin-badge"), "neutral", tr("statusNoRelease"));
   } else if (pluginUpdate) {
     byId("plugin-version-line").textContent = `${installedPlugin} → ${availablePlugin}`;
     const required = Boolean(update?.plugin_mandatory && update?.plugin_update_available);
@@ -752,11 +824,13 @@ function renderUpdate() {
   const pluginUpdate = Boolean(selectedPluginUpdate());
   const hasUpdates = mainUpdates || pluginUpdate;
   const allCurrent = Boolean(update && pluginStatus) && !hasUpdates && !pluginUnavailable;
-  byId("installation-status").textContent = pluginUnavailable && installed
-    ? tr("pluginCheckUnavailable")
-    : allCurrent
-      ? tr("allCurrentDescription")
-      : (installed ? tr("ready") : tr("notInstalled"));
+  byId("installation-status").textContent = channelEmpty
+    ? tr(installed ? "channelEmptyInstalled" : "channelEmptyNoInstall")
+    : pluginUnavailable && installed
+      ? tr("pluginCheckUnavailable")
+      : allCurrent
+        ? tr("allCurrentDescription")
+        : (installed ? tr("ready") : tr("notInstalled"));
   byId("play").disabled = !canLaunch();
   byId("configure").disabled = !canLaunch();
   byId("check").disabled = checking || installingUpdate || launching;
@@ -786,6 +860,13 @@ function renderUpdate() {
   if (!update) {
     if (state.cached_policy_invalid) {
       setStatus(tr("policyInvalid"), "error");
+      return;
+    }
+    if (channelEmpty) {
+      setStatus(
+        tr(launcherSettings?.allow_test_releases ? "channelEmptyTest" : "channelEmptyStable"),
+        "neutral"
+      );
       return;
     }
     setStatus(tr(updateUnavailable ? (installed ? "unavailable" : "unavailableNoInstall") : "current"), updateUnavailable ? "warning" : "ok");
@@ -823,6 +904,7 @@ async function loadState() {
     if (!invoke) throw new Error("Tauri unavailable");
     state = await invoke("launcher_state");
     update = state.cached_update || null;
+    channelEmpty = false;
     renderUpdate();
   } catch (error) {
     state = null;
@@ -844,6 +926,7 @@ async function checkUpdate() {
   checking = true;
   updateUnavailable = false;
   pluginUnavailable = false;
+  channelEmpty = false;
   renderUpdate();
   const [updateResult, pluginResult] = await Promise.allSettled([
     invoke("check_online_update"),
@@ -851,7 +934,8 @@ async function checkUpdate() {
   ]);
   const errors = [];
   if (updateResult.status === "fulfilled") {
-    update = updateResult.value;
+    update = updateResult.value || null;
+    channelEmpty = update === null;
     state.cached_update = update;
     state.cached_policy_invalid = false;
   } else {
@@ -986,6 +1070,7 @@ byId("resident-state").addEventListener("click", () => saveSetting("resident", !
 byId("setting-resident").addEventListener("change", event => saveSetting("resident", event.target.checked));
 byId("setting-background-check").addEventListener("change", event => saveSetting("background_check", event.target.checked));
 byId("setting-autostart").addEventListener("change", event => saveSetting("autostart", event.target.checked));
+byId("setting-test-releases").addEventListener("change", event => saveSetting("allow_test_releases", event.target.checked));
 [byId("release-dialog"), byId("settings-dialog")].forEach(dialog => {
   dialog.addEventListener("click", event => {
     const bounds = dialog.getBoundingClientRect();
@@ -1011,6 +1096,7 @@ if (listen) {
   await listen("arena-tray-check-requested", checkUpdate);
   await listen("arena-background-update-available", event => {
     update = event.payload;
+    channelEmpty = false;
     if (state) state.cached_update = update;
     renderUpdate();
   });
