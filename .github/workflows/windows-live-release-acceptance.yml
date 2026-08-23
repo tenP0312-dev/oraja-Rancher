@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Current patch-server launcher release tag
+        description: Patch-server release tag containing the current launcher
         required: true
         type: string
       previous_release_tag:
-        description: Previous patch-server launcher release tag
+        description: Patch-server release tag containing the previous launcher
         required: true
         type: string
   pull_request:
@@ -22,8 +22,8 @@ jobs:
   windows-live-acceptance:
     runs-on: windows-2022
     env:
-      RELEASE_TAG: ${{ inputs.release_tag || 'test-launcher-0.2.22' }}
-      PREVIOUS_RELEASE_TAG: ${{ inputs.previous_release_tag || 'test-launcher-0.2.21' }}
+      RELEASE_TAG: ${{ inputs.release_tag || 'test-0.4.14.67' }}
+      PREVIOUS_RELEASE_TAG: ${{ inputs.previous_release_tag || 'test-0.4.14.59' }}
     steps:
       - uses: actions/setup-java@v5
         with:
@@ -34,22 +34,44 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $patchRepository = "tenP0312-dev/bms-ir-arena-patch-server"
-          $currentVersion = $env:RELEASE_TAG -replace '^test-launcher-', ''
-          $previousVersion = $env:PREVIOUS_RELEASE_TAG -replace '^test-launcher-', ''
-          if ($currentVersion -eq $env:RELEASE_TAG -or $previousVersion -eq $env:PREVIOUS_RELEASE_TAG) {
-            throw "Release tags must use test-launcher-<version>"
+
+          function Get-LauncherReleaseAsset([string] $tag) {
+            $pattern = '^BMS-IR-Arena-Test-launcher-(?<version>[0-9]+(?:\.[0-9]+)+(?:[-+][A-Za-z0-9.-]+)?)-windows-x64\.exe$'
+            $headers = @{ "User-Agent" = "oraja-Rancher-live-acceptance" }
+            $release = Invoke-RestMethod `
+              -Uri "https://api.github.com/repos/$patchRepository/releases/tags/$tag" `
+              -Headers $headers
+            $assets = @($release.assets | Where-Object { $_.name -match $pattern })
+            if ($assets.Count -ne 1) {
+              throw "Release $tag must contain exactly one Windows test launcher asset"
+            }
+            $match = [regex]::Match($assets[0].name, $pattern)
+            if (-not $match.Success) {
+              throw "Could not parse the launcher version from release $tag"
+            }
+            return [PSCustomObject]@{
+              Version = $match.Groups["version"].Value
+              Name = $assets[0].name
+              Url = $assets[0].browser_download_url
+            }
           }
-          $currentAsset = "BMS-IR-Arena-Test-Launcher-$currentVersion-windows-x86-64.exe"
-          $previousAsset = "BMS-IR-Arena-Test-Launcher-$previousVersion-windows-x86-64.exe"
+
+          $currentRelease = Get-LauncherReleaseAsset $env:RELEASE_TAG
+          $previousRelease = Get-LauncherReleaseAsset $env:PREVIOUS_RELEASE_TAG
+          $currentVersion = $currentRelease.Version
+          $previousVersion = $previousRelease.Version
+          if ($currentVersion -eq $previousVersion) {
+            throw "Current and previous releases resolve to the same launcher version"
+          }
+          $currentAsset = $currentRelease.Name
+          $previousAsset = $previousRelease.Name
           $liveManifestUrl = "https://tenp0312-dev.github.io/bms-ir-arena-patch-server/channels/test/windows-x64/manifest.json"
-          $currentReleaseBase = "https://github.com/$patchRepository/releases/download/$env:RELEASE_TAG"
-          $previousReleaseBase = "https://github.com/$patchRepository/releases/download/$env:PREVIOUS_RELEASE_TAG"
           $currentLauncher = Join-Path $env:RUNNER_TEMP $currentAsset
           $previousLauncher = Join-Path $env:RUNNER_TEMP $previousAsset
           $liveManifest = Join-Path $env:RUNNER_TEMP "live-windows-manifest.json"
 
-          Invoke-WebRequest "$currentReleaseBase/$currentAsset" -OutFile $currentLauncher
-          Invoke-WebRequest "$previousReleaseBase/$previousAsset" -OutFile $previousLauncher
+          Invoke-WebRequest $currentRelease.Url -OutFile $currentLauncher
+          Invoke-WebRequest $previousRelease.Url -OutFile $previousLauncher
           Invoke-WebRequest $liveManifestUrl -OutFile $liveManifest
 
           $manifest = Get-Content $liveManifest -Raw | ConvertFrom-Json
@@ -84,15 +106,14 @@ jobs:
             }
           }
 
-          # The exact GitHub asset name resolves to stable in the old fallback
-          # algorithm. A configured current binary must still fetch test and
-          # cache the byte-identical signed live manifest on first load.
+          # A configured current binary must inherit its compiled test default
+          # and cache the byte-identical signed live manifest on first load.
           $longNameRoot = Join-Path $env:RUNNER_TEMP "long-name-check"
           New-ReadyRoot $longNameRoot
           $longNameLauncher = Join-Path $longNameRoot $currentAsset
           Copy-Item $currentLauncher $longNameLauncher
           $longNameProcess = Start-Process $longNameLauncher -WorkingDirectory $longNameRoot -PassThru
-          $cachedPolicy = Join-Path $longNameRoot ".bmsir-launcher-policy.json"
+          $cachedPolicy = Join-Path $longNameRoot ".bmsir-launcher-policy-test.json"
           try {
             foreach ($attempt in 1..60) {
               if (Test-Path $cachedPolicy) { break }
@@ -157,7 +178,7 @@ jobs:
           }
           $helperProcess = [System.Diagnostics.Process]::Start($startInfo)
           if (-not $helperProcess.WaitForExit(60000) -or $helperProcess.ExitCode -ne 0) {
-            throw "0.2.21 self-update helper failed"
+            throw "$previousVersion self-update helper failed"
           }
 
           foreach ($attempt in 1..60) {
