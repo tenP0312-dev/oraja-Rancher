@@ -176,6 +176,10 @@ working updater.
 
 ## Validation build
 
+Launcher 0.2.30 retains 0.2.29 update behavior and adds the macOS camera usage
+description for the optional hand camera in Arena oraja 0.4.14.110.
+Actual camera permission and video acceptance remain operator-run.
+
 macOS bundles merge `src-tauri/Info.plist` to include the camera usage
 description for Arena oraja's optional skin-controlled hand camera
 ([body implementation](https://github.com/tenP0312-dev/oraja/issues/480)).
