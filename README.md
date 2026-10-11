@@ -176,6 +176,14 @@ working updater.
 
 ## Validation build
 
+macOS bundles merge `src-tauri/Info.plist` to include the camera usage
+description for Arena oraja's optional skin-controlled hand camera
+([body implementation](https://github.com/tenP0312-dev/oraja/issues/480)).
+Both validation and internal-test bundle checks verify that description.
+The camera is OFF by default in the body; the launcher does not capture video.
+Actual launcher → Java → FFmpeg permission attribution and allow/deny behavior
+remain operator-run acceptance. Source changes do not publish a launcher update.
+
 ```sh
 cd src-tauri
 cargo test --locked

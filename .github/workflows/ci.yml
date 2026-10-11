@@ -76,6 +76,8 @@ jobs:
           test -d "$app"
           test -x "$binary"
           test "$(plutil -extract CFBundleName raw -o - "$app/Contents/Info.plist")" = "BMS-IR Arena"
+          test "$(plutil -type NSCameraUsageDescription "$app/Contents/Info.plist")" = "string"
+          test -n "$(plutil -extract NSCameraUsageDescription raw -o - "$app/Contents/Info.plist")"
           file "$binary" | grep -q 'Mach-O 64-bit executable arm64'
           ditto -c -k --sequesterRsrc --keepParent "$app" bmsir-arena-launcher-validation-only.app.zip
 
@@ -179,6 +181,8 @@ jobs:
             exit 1
           fi
           codesign --force --deep --sign - "$app"
+          test "$(plutil -type NSCameraUsageDescription "$app/Contents/Info.plist")" = "string"
+          test -n "$(plutil -extract NSCameraUsageDescription raw -o - "$app/Contents/Info.plist")"
           codesign --verify --deep --strict "$app"
           ditto -c -k --sequesterRsrc --keepParent "$app" "../BMS-IR Arena Test.app.zip"
 
